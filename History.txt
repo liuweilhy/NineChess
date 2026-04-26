@@ -1,5 +1,14 @@
 # 九连棋 NineChess
 ## 更新历史：
+### 2026/04/26    v2.0
+    1. 重整核心模型边界，新增 ninechess_common.h，梳理 Rule、ChessData、位棋盘状态与新字段命名。
+    2. 将限时、限步、超时裁定、AI 超时强制出招等赛制逻辑集中到 GameController，giveup() 仅保留认输语义。
+    3. 重写并重命名 Alpha-Beta AI 为 ninechess_ai_ab.*，使用位棋盘、快速接口、迭代加深和对称置换表。
+    4. 新增 NineChessConsole 命令行测试工程，支持规则切换、命令回放、历史查看、撤销、认输、判和与启动参数。
+    5. 新增 RuleHarness 与 PowerShell 回归脚本，覆盖四套规则白盒测试和 Console 黑盒测试。
+    6. 同步 Visual Studio、qmake 工程和 /utf-8 编译设置，统一 UTF-8 without BOM 与 CRLF 文本格式。
+    7. 清理本地生成文件，并更新 README、界面工程文件和图标资源说明。
+
 ### 2018/12/23    v1.5
     1. 优化AI算法
 

@@ -1,12 +1,11 @@
-﻿#ifndef AITHREAD_H
-#define AITHREAD_H
+#pragma once
 
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
 #include <QTimer>
 #include "ninechess.h"
-#include "ninechessai_ab.h"
+#include "ninechess_ai_ab.h"
 
 class AiThread : public QThread
 {
@@ -24,11 +23,10 @@ signals:
     // 计算结束的信号
     void calcFinished();
 
-protected:
+public:
     void run() override;
 
-public:
-    // AI设置
+    // AI 设置
     void setAi(const NineChess &chess);
     void setAi(const NineChess &chess, int depth, int time);
     // 深度和限时
@@ -57,7 +55,7 @@ private:
     // 主线程棋对象的引用
     const NineChess *chess;
     // Alpha-Beta剪枝算法类
-    NineChessAi_ab ai_ab;
+    NineChess_AI_AB ai_ab;
     // AI的层数
     int aiDepth;
     // AI的限时
@@ -66,4 +64,3 @@ private:
     QTimer timer;
 };
 
-#endif // AITHREAD_H

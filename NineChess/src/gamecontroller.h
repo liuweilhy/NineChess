@@ -1,17 +1,18 @@
-﻿/* 这个类处理场景对象QGraphicsScene
- * 它是本程序MVC模型中唯一的控制模块
- * 它不对主窗口中的控件做任何操作，只向主窗口发出信号
- * 本来可以重载QGraphicsScene实现它，还能省去写事件过滤器的麻烦
- * 但用一个场景类做那么多控制模块的操作看上去不太好
- */
+/****************************************************************************
+** GameController - 娓告垙鎺у埗鍣?
+** MVC 妯″瀷涓殑鎺у埗妯″潡锛岃礋璐ｅ崗璋冭鍥句笌妯″瀷
+****************************************************************************/
 
-#ifndef GAMECONTROLLER_H
-#define GAMECONTROLLER_H
+#pragma once
 
+#include <cstdint>
+#include <QObject>
 #include <QTime>
 #include <QPointF>
 #include <QMap>
 #include <QList>
+#include <QVector>
+#include <QSoundEffect>
 #include <QTextStream>
 #include <QStringListModel>
 #include <QModelIndex>
@@ -27,120 +28,139 @@ class GameController : public QObject
 public:
     GameController(GameScene &scene, QObject *parent = nullptr);
     ~GameController();
-    //主窗口菜单栏明细
-    const QMap <int, QStringList> getActions();
-    int getRuleNo() { return ruleNo; }
-    int getTimeLimit() { return timeLimit; }
-    int getStepsLimit() { return stepsLimit; }
-    bool isAnimation() { return hasAnimation; }
-    void setDurationTime(int i) { durationTime = i; }
-    int getDurationTime() { return durationTime; }
-    QStringListModel *getManualListModel() { return &manualListModel; }
+
+    const QMap<int, QStringList> getActions();
+
+    int getRuleNo() const { return ruleNo; }
+    int getTimeLimit() const { return timeLimit; }
+    int getStepsLimit() const { return stepsLimit; }
+    bool isAnimation() const { return hasAnimation; }
+    int getDurationTime() const { return durationTime; }
+    QStringListModel* getManualListModel() { return &manualListModel; }
+
     void setAiDepthTime(int depth1, int time1, int depth2, int time2);
     void getAiDepthTime(int &depth1, int &time1, int &depth2, int &time2);
 
 signals:
-    // 玩家1(先手）用时改变的信号
     void time1Changed(const QString &time);
-    // 玩家2(后手）用时改变的信号
     void time2Changed(const QString &time);
-    // 通知主窗口更新状态栏的信号
-    void statusBarChanged(const QString & message);
+    void statusBarChanged(const QString &message);
+    void pieceCountsChanged(const QString &player1, const QString &player2);
 
 public slots:
-    // 设置规则
     void setRule(int ruleNo, int stepLimited = -1, int timeLimited = -1);
-    // 游戏开始
     void gameStart();
-    // 游戏重置
     void gameReset();
-    // 设置编辑棋局状态
+
     void setEditing(bool arg = true);
-    // 设置黑白反转状态
     void setInvert(bool arg = true);
-    // 让电脑执先手
+
     void setEngine1(bool arg = true);
-    // 让电脑执后手
     void setEngine2(bool arg = true);
-    // 是否有落子动画
+
     void setAnimation(bool arg = true);
-    // 是否有落子音效
     void setSound(bool arg = true);
-    // 播放声音
-    void playSound(const QString &soundPath);
-    // 上下翻转
+
     void flip();
-    // 左右镜像
     void mirror();
-    // 视图须时针旋转90°
     void turnRight();
-    // 视图逆时针旋转90°
     void turnLeft();
 
-    // 根据QGraphicsScene的信号和状态来执行选子、落子或去子
     bool actionPiece(QPointF p);
-    // 认输
     bool giveUp();
-    // 棋谱的命令行执行
     bool command(const QString &cmd, bool update = true);
-    // 历史局面及局面改变
     bool phaseChange(int row, bool forceUpdate = false);
-    // 更新棋局显示，每步后执行才能刷新局面
-    bool updateScence();
-    bool updateScence(NineChess &chess);
+
+    void updateScence(const NineChess* chess = nullptr);
 
 protected:
-    //bool eventFilter(QObject * watched, QEvent * event);
-    // 定时器
-    void timerEvent(QTimerEvent * event);
+    void timerEvent(QTimerEvent *event);
+    void playSound(const QString &soundPath);
+    void refreshTimeDisplays();
 
 private:
-    // 棋对象的数据模型
-    NineChess chess;
-    // 棋对象的数据模型（临时）
-    NineChess chessTemp;
-    // 2个AI的线程
-    AiThread ai1, ai2;
-    // 棋局的场景类
-    GameScene &scene;
-    // 所有棋子
-    QList<PieceItem *> pieceList;
-    // 当前棋子
-    PieceItem *currentPiece;
-    // 当前浏览的棋谱行
-    int currentRow;
-    // 玩家1手棋数、玩家2手棋数、待去棋数，没有用到，注释掉
-    //int player1_InHand, player2_InHand, num_NeedRemove;
-    // 是否处于“编辑棋局”状态
-    bool isEditing;
-    // 是否黑白反转
-    bool isInverted;
-    // 是否电脑执先手
-    bool isEngine1;
-    // 是否电脑执后手
-    bool isEngine2;
-    // 是否有落子动画
-    bool hasAnimation;
-    // 动画持续时间
-    int durationTime;
-    // 是否有落子音效
-    bool hasSound;
-    // 定时器ID
-    int timeID;
-    // 规则号
-    int ruleNo;
-    // 规则限时（分钟）
-    int timeLimit;
-    // 规则限步数
-    int stepsLimit;
-    // 玩家1剩余时间（毫秒）
-    int time1;
-    // 玩家2剩余时间（毫秒）
-    int time2;
-    // 用于主窗口状态栏显示的字符串
-    QString message;
-    // 棋谱字符串列表模型
-    QStringListModel manualListModel;
-};
+    enum class SoundAction {
+        None,
+        NewGame,
+        Choose,
+        Place,
+        Capture,
+        GameOver,
+        Warning
+    };
 
-#endif // GAMECONTROLLER_H
+    struct AiDispatchState {
+        int64_t calcStartedMS = 0;
+        uint64_t calcRevision = 0;
+        uint64_t calcSequence = 0;
+        uint64_t pendingSequence = 0;
+        QString pendingCommand;
+        bool pendingUpdate = true;
+        bool hasPendingCommand = false;
+    };
+
+    static constexpr int kMinAiActionDelayMS = 500;
+
+    static int64_t currentTimeMS();
+    const AiThread* aiSourceFromSender() const;
+    AiDispatchState& aiDispatchState(const AiThread* sourceAi);
+    bool executeCommandInternal(const QString &cmd, bool update, const AiThread *sourceAi);
+    void onAiCalcStarted();
+    void dispatchPendingAiCommand(const AiThread *sourceAi, uint64_t sequence);
+    void invalidatePendingAiCommands();
+    void advanceGameStateRevision();
+    void resetClockState();
+    void restartTurnClock();
+    void finishTurnClock(NineChess::Players finishedTurn);
+    void getElapsedTimesMS(int &elapsed1, int &elapsed2) const;
+    static SoundAction soundActionFromCommand(const QString &cmd, uint16_t previousStatus);
+    void playActionSound(SoundAction action, bool succeeded = true,
+        uint16_t previousStatus = 0, int32_t previousSelectedPos = -1,
+        const NineChess* chess = nullptr);
+    void syncManualListFromChess();
+    void syncAiState();
+    void emitPieceCountsChanged(const NineChess* chess = nullptr);
+    bool applyStepLimit(NineChess::Players previousTurn);
+    void handleTimeout();
+
+    NineChess chess;
+    NineChess chessTemp;
+
+    AiThread ai1;
+    AiThread ai2;
+
+    GameScene &scene;
+    QList<PieceItem *> pieceList;
+    PieceItem *currentPiece;
+    QVector<int> player1DisplaySlots;
+    QVector<int> player2DisplaySlots;
+    uint32_t player1DisplayBoard;
+    uint32_t player2DisplayBoard;
+
+    int currentRow;
+    bool isEditing;
+    bool isInverted;
+    bool isEngine1;
+    bool isEngine2;
+    bool hasAnimation;
+    int durationTime;
+    bool hasSound;
+
+    int timeID;
+    int ruleNo;
+    int timeLimit;
+    int stepsLimit;
+    int displayTime1MS;
+    int displayTime2MS;
+    int64_t player1ElapsedMS;
+    int64_t player2ElapsedMS;
+    int64_t turnStartTimeMS;
+    NineChess::Players forcedAiTimeoutTurn;
+
+    QString message;
+    QStringListModel manualListModel;
+    QMap<QString, QSoundEffect*> soundCache;
+    AiDispatchState aiDispatch1;
+    AiDispatchState aiDispatch2;
+    uint64_t gameStateRevision = 0;
+};

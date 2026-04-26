@@ -1,4 +1,10 @@
-﻿#include "gamescene.h"
+/****************************************************************************
+** GameScene - 游戏场景实现
+**
+** 负责棋盘初始化和鼠标事件处理
+****************************************************************************/
+
+#include "gamescene.h"
 #include "pieceitem.h"
 #include "boarditem.h"
 #include "graphicsconst.h"
@@ -8,6 +14,7 @@
 #include <QKeyEvent>
 #include <QDebug>
 
+// ==================== 构造函数 ====================
 GameScene::GameScene(QObject *parent) : QGraphicsScene(parent),
     board(nullptr),
     pos_p1(LINE_INTERVAL * 4, LINE_INTERVAL * 6),
@@ -37,13 +44,15 @@ void GameScene::keyPressEvent(QKeyEvent *keyEvent)
 }
 */
 
+// ==================== 事件处理 ====================
+// 屏蔽双击事件
 void GameScene::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *mouseEvent)
 {
     //屏蔽双击事件
     mouseEvent->accept();
 }
 
-
+// 屏蔽鼠标按下事件
 void GameScene::mousePressEvent(QGraphicsSceneMouseEvent *mouseEvent)
 {
     //屏蔽鼠标按下事件
@@ -64,6 +73,7 @@ void GameScene::mousePressEvent(QGraphicsSceneMouseEvent *mouseEvent)
     */
 }
 
+// 处理鼠标释放事件，发送点击位置信号
 void GameScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *mouseEvent)
 {
     // 只处理左键事件
@@ -94,18 +104,23 @@ void GameScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *mouseEvent)
     //QGraphicsScene::mouseReleaseEvent(mouseEvent);
 }
 
+// ==================== 坐标转换 ====================
+// 将圈位坐标(c,p)转换为场景坐标
 QPointF GameScene::cp2pos(int c, int p)
 {
     return board->cp2pos(c, p);
 }
 
+// 将场景坐标转换为圈位坐标(c,p)
 bool GameScene::pos2cp(QPointF pos, int &c, int &p)
 {
     return board->pos2cp(pos, c, p);
 }
 
-void GameScene::setDiagonal(bool arg /*= true*/)
+// 设置棋盘斜线显示
+void GameScene::setDiagonal(bool arg)
 {
     if (board)
         board->setDiagonal(arg);
 }
+

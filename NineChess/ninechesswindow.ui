@@ -6,9 +6,15 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>491</width>
-    <height>418</height>
+    <width>800</width>
+    <height>680</height>
    </rect>
+  </property>
+  <property name="font">
+   <font>
+    <family>Microsoft YaHei</family>
+    <pointsize>10</pointsize>
+   </font>
   </property>
   <property name="windowTitle">
    <string>九连棋</string>
@@ -56,8 +62,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>491</width>
-     <height>26</height>
+     <width>800</width>
+     <height>20</height>
     </rect>
    </property>
    <widget class="QMenu" name="menu_F">
@@ -147,6 +153,12 @@
    <property name="windowTitle">
     <string>工具栏</string>
    </property>
+   <property name="iconSize">
+    <size>
+     <width>24</width>
+     <height>24</height>
+    </size>
+   </property>
    <attribute name="toolBarArea">
     <enum>TopToolBarArea</enum>
    </attribute>
@@ -176,6 +188,12 @@
      <horstretch>0</horstretch>
      <verstretch>0</verstretch>
     </sizepolicy>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>200</width>
+     <height>264</height>
+    </size>
    </property>
    <property name="autoFillBackground">
     <bool>false</bool>
@@ -240,7 +258,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>9</pointsize>
+               <pointsize>12</pointsize>
               </font>
              </property>
              <property name="text">
@@ -264,8 +282,7 @@
              </property>
              <property name="font">
               <font>
-               <family>微软雅黑</family>
-               <pointsize>9</pointsize>
+               <pointsize>12</pointsize>
               </font>
              </property>
              <property name="text">
@@ -282,6 +299,12 @@
              <horstretch>0</horstretch>
              <verstretch>0</verstretch>
             </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
            </property>
            <property name="styleSheet">
             <string notr="true"/>
@@ -321,7 +344,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>9</pointsize>
+               <pointsize>12</pointsize>
               </font>
              </property>
              <property name="text">
@@ -345,8 +368,7 @@
              </property>
              <property name="font">
               <font>
-               <family>微软雅黑</family>
-               <pointsize>9</pointsize>
+               <pointsize>12</pointsize>
               </font>
              </property>
              <property name="text">
@@ -363,6 +385,12 @@
              <horstretch>0</horstretch>
              <verstretch>0</verstretch>
             </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
            </property>
            <property name="styleSheet">
             <string notr="true"/>
@@ -394,6 +422,11 @@
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
+             <property name="font">
+              <font>
+               <pointsize>10</pointsize>
+              </font>
+             </property>
              <property name="text">
               <string/>
              </property>
@@ -412,8 +445,7 @@
              </property>
              <property name="font">
               <font>
-               <family>AmdtSymbols</family>
-               <pointsize>7</pointsize>
+               <pointsize>10</pointsize>
               </font>
              </property>
              <property name="text">
@@ -424,13 +456,7 @@
           </layout>
          </item>
          <item>
-          <widget class="ManualListView" name="listView">
-           <property name="font">
-            <font>
-             <pointsize>7</pointsize>
-            </font>
-           </property>
-          </widget>
+          <widget class="ManualListView" name="listView"/>
          </item>
         </layout>
        </widget>

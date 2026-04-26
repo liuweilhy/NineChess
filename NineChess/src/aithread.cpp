@@ -1,4 +1,4 @@
-﻿#include <QDebug>
+#include <QDebug>
 #include "aithread.h"
 
 AiThread::AiThread(int id, QObject *parent) : QThread(parent),
@@ -51,9 +51,9 @@ void AiThread::run()
 
     while (!isInterruptionRequested()) {
         mutex.lock();
-        if (chess->whosTurn() == NineChess::PLAYER1)
+        if (chess->getTurn() == NineChess::PLAYER1)
             i = 1;
-        else if (chess->whosTurn() == NineChess::PLAYER2)
+        else if (chess->getTurn() == NineChess::PLAYER2)
             i = 2;
         else
             i = 0;
@@ -69,9 +69,15 @@ void AiThread::run()
         mutex.unlock();
 
         ai_ab.alphaBetaPruning(aiDepth);
+
+        // 检查是否因 pause() 而被强制中断，若是则不发出招法，避免在人类回合发出 AI 指令
+        mutex.lock();
+        bool wasPaused = waiting_;
+        mutex.unlock();
+
         const char * str = ai_ab.bestMove();
         qDebug() << str;
-        if (strcmp(str, "error!"))
+        if (!wasPaused && strcmp(str, "error!"))
             emit command(str);
 //        qDebug() << "Thread" << id << "run" << ++iTemp << "times";
         emit calcFinished();
@@ -101,6 +107,8 @@ void AiThread::pause()
 {
     mutex.lock();
     waiting_ = true;
+    // 同时中断正在进行的搜索，防止搜索完成后仍然 emit command
+    ai_ab.quit();
     mutex.unlock();
 }
 
@@ -126,3 +134,4 @@ void AiThread::stop()
         mutex.unlock();
     }
 }
+

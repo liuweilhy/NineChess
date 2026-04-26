@@ -1,9 +1,16 @@
-﻿#include "pieceitem.h"
+/****************************************************************************
+** PieceItem - 棋子图形项实现
+**
+** 负责棋子的绘制、状态管理和鼠标交互
+****************************************************************************/
+
+#include "pieceitem.h"
 #include "graphicsconst.h"
 #include <QPainter>
 #include <QGraphicsSceneMouseEvent>
 #include <QStyleOption>
 
+// ==================== 构造函数 ====================
 PieceItem::PieceItem(QGraphicsItem *parent) : QGraphicsItem(parent),
 num(0),
 deleted(false),
@@ -41,11 +48,13 @@ PieceItem::~PieceItem()
 {
 }
 
+// ==================== 图形项虚函数 ====================
 QRectF PieceItem::boundingRect() const
 {
     return QRectF(-size/2, -size/2, size, size);
 }
 
+// 获取形状路径（椭圆）
 QPainterPath PieceItem::shape() const
 {
     QPainterPath path;
@@ -53,6 +62,25 @@ QPainterPath PieceItem::shape() const
     return path;
 }
 
+void PieceItem::setModel(Models model)
+{
+    if (this->model == model)
+        return;
+
+    this->model = model;
+    update();
+}
+
+void PieceItem::setDeleted(bool deleted)
+{
+    if (this->deleted == deleted)
+        return;
+
+    this->deleted = deleted;
+    update();
+}
+
+// ==================== 绘制 ====================
 void PieceItem::paint(QPainter *painter,
                       const QStyleOptionGraphicsItem *option,
                       QWidget *widget)
@@ -114,6 +142,8 @@ void PieceItem::paint(QPainter *painter,
     }
 }
 
+// ==================== 鼠标事件 ====================
+// 鼠标按下：显示握住的手形
 void PieceItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     // 鼠标按下时变为握住的手形
@@ -121,14 +151,17 @@ void PieceItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
     QGraphicsItem::mousePressEvent(event);
 }
 
+// 鼠标移动
 void PieceItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
     QGraphicsItem::mouseMoveEvent(event);
 }
 
+// 鼠标释放：显示伸开的手形
 void PieceItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
     // 鼠标松开时变为伸开的手形
     setCursor(Qt::OpenHandCursor);
     QGraphicsItem::mouseReleaseEvent(event);
 }
+

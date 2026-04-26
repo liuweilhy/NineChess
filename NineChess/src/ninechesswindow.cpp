@@ -1,10 +1,10 @@
-﻿#if _MSC_VER >= 1600
-#pragma execution_character_set("utf-8")
-#endif
-
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QMap>
 #include <QMessageBox>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QDialog>
 #include <QFileDialog>
@@ -26,7 +26,39 @@
 #include "ninechesswindow.h"
 #include "gamecontroller.h"
 #include "gamescene.h"
-#include "graphicsconst.h"
+
+namespace {
+
+QString defaultManualDirectory()
+{
+    const QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (!documentsPath.isEmpty())
+        return documentsPath;
+
+    return QDir::homePath();
+}
+
+QString lastManualDirectory()
+{
+    QSettings settings(QStringLiteral("NineChess"), QStringLiteral("NineChess"));
+    const QString directory = settings.value(QStringLiteral("manual/lastDirectory"), defaultManualDirectory()).toString();
+    if (!directory.isEmpty() && QDir(directory).exists())
+        return directory;
+
+    return defaultManualDirectory();
+}
+
+void saveLastManualDirectory(const QString &path)
+{
+    const QString directory = QFileInfo(path).absoluteDir().absolutePath();
+    if (directory.isEmpty())
+        return;
+
+    QSettings settings(QStringLiteral("NineChess"), QStringLiteral("NineChess"));
+    settings.setValue(QStringLiteral("manual/lastDirectory"), directory);
+}
+
+}
 
 NineChessWindow::NineChessWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -46,7 +78,7 @@ NineChessWindow::NineChessWindow(QWidget *parent)
     // 设置场景
     scene = new GameScene(this);
     // 设置场景尺寸大小为棋盘大小的1.08倍
-    scene->setSceneRect(-BOARD_SIZE * 0.54, -BOARD_SIZE * 0.54, BOARD_SIZE*1.08, BOARD_SIZE*1.08);
+    scene->setSceneRect(-600.0 * 0.54, -600.0 * 0.54, 600.0 * 1.08, 600.0 * 1.08);
 
     // 初始化各个控件
 
@@ -177,6 +209,11 @@ void NineChessWindow::initialize()
     // 更新LCD2，显示玩家2用时
     connect(game, SIGNAL(time2Changed(QString)),
         ui.lcdNumber_2, SLOT(display(QString)));
+    connect(game, &GameController::pieceCountsChanged, this,
+        [this](const QString &player1, const QString &player2) {
+            ui.label1->setText(player1);
+            ui.label2->setText(player2);
+        });
 
     // 关联场景的信号和控制器的槽
     connect(scene, SIGNAL(mouseReleased(QPointF)),
@@ -233,12 +270,12 @@ void NineChessWindow::ruleInfo()
     // 规则显示
     ui.labelRule->setText(tl + sl);
     // 规则提示
-    ui.labelInfo->setToolTip(QString(NineChess::RULES[ruleNo].name) + "\n" + 
-        NineChess::RULES[ruleNo].info);
+    ui.labelInfo->setToolTip(QString(NineChess::rules[ruleNo].name) + "\n" + 
+        NineChess::rules[ruleNo].description);
     ui.labelRule->setToolTip(ui.labelInfo->toolTip());
 
     //QString tip_Rule = QString("%1\n%2").arg(tr(NineChess::RULES[ruleNo].name))
-    //    .arg(tr(NineChess::RULES[ruleNo].info));
+    //    .arg(tr(NineChess::RULES[ruleNo].description));
 }
 
 void NineChessWindow::on_actionLimited_T_triggered()
@@ -361,12 +398,13 @@ void NineChessWindow::on_actionNew_N_triggered()
 
 void NineChessWindow::on_actionOpen_O_triggered()
 {
-    QString path = QFileDialog::getOpenFileName(this, tr("打开棋谱文件"), QDir::currentPath(), "TXT(*.txt)");
+    QString path = QFileDialog::getOpenFileName(this, tr("打开棋谱文件"), lastManualDirectory(), "TXT(*.txt)");
     if (path.isEmpty() == false)
     {
+        saveLastManualDirectory(path);
         if (file.isOpen())
             file.close();
-        //文件对象
+        // 文件对象
         file.setFileName(path);
         // 不支持1MB以上的文件
         if (file.size() > 0x100000 )
@@ -377,7 +415,7 @@ void NineChessWindow::on_actionOpen_O_triggered()
             return;
         }
 
-        //打开文件,只读方式打开
+        // 打开文件,只读方式打开
         bool isok = file.open(QFileDevice::ReadOnly | QFileDevice::Text);
         if (isok)
         {
@@ -411,11 +449,11 @@ void NineChessWindow::on_actionSave_S_triggered()
     if (file.isOpen())
     {
         file.close();
-        //打开文件,只写方式打开
+        // 打开文件,只写方式打开
         bool isok = file.open(QFileDevice::WriteOnly | QFileDevice::Text);
         if (isok)
         {
-            //写文件
+            // 写文件
             QTextStream textStream(&file);
             QStringListModel *strlist = qobject_cast<QStringListModel *>(ui.listView->model());
             for (QString cmd : strlist->stringList())
@@ -429,9 +467,14 @@ void NineChessWindow::on_actionSave_S_triggered()
 
 void NineChessWindow::on_actionSaveAs_A_triggered()
 {
-    QString path = QFileDialog::getSaveFileName(this, tr("打开棋谱文件"), QDir::currentPath()+tr("棋谱.txt"), "TXT(*.txt)");
+    QString initialPath = file.fileName();
+    if (initialPath.isEmpty())
+        initialPath = QDir(lastManualDirectory()).filePath(tr("棋谱.txt"));
+
+    QString path = QFileDialog::getSaveFileName(this, tr("打开棋谱文件"), initialPath, "TXT(*.txt)");
     if (path.isEmpty() == false)
     {
+        saveLastManualDirectory(path);
         if (file.isOpen())
             file.close();
         //文件对象  
@@ -747,12 +790,12 @@ void NineChessWindow::on_actionEngine_E_triggered()
 
 void NineChessWindow::on_actionViewHelp_V_triggered()
 {
-    QDesktopServices::openUrl(QUrl("https://blog.csdn.net/liuweilhy/article/details/83832180"));
+    QDesktopServices::openUrl(QUrl("https://gitee.com/liuweilhy/NineChess"));
 }
 
 void NineChessWindow::on_actionWeb_W_triggered()
 {
-    QDesktopServices::openUrl(QUrl("http://hy-tech.top"));
+    QDesktopServices::openUrl(QUrl("https://www.cnblogs.com/liuweilhy"));
 }
 
 void NineChessWindow::on_actionAbout_A_triggered()
@@ -769,7 +812,7 @@ void NineChessWindow::on_actionAbout_A_triggered()
     QLabel *label_icon1 = new QLabel(dialog);
     QLabel *label_icon2 = new QLabel(dialog);
     QLabel *label_text = new QLabel(dialog);
-    QLabel *label_image = new QLabel(dialog);
+    QLabel *label_text2 = new QLabel(dialog);
     // 设置各个控件数据
     label_icon1->setPixmap(QPixmap(QString::fromUtf8(":/image/resources/image/black_piece.png")));
     label_icon2->setPixmap(QPixmap(QString::fromUtf8(":/image/resources/image/white_piece.png")));
@@ -780,18 +823,17 @@ void NineChessWindow::on_actionAbout_A_triggered()
     label_icon1->setScaledContents(true);
     label_icon2->setScaledContents(true);
 
-    label_text->setText(tr("支持开源，捐助作者，诚接软件开发项目 —— liuweilhy"));
+    label_text->setText(tr("NineChess 九连棋"));
     label_text->setAlignment(Qt::AlignCenter);
-    label_image->setPixmap(QPixmap(QString::fromUtf8(":/image/resources/image/donate.png")));
-    label_image->setAlignment(Qt::AlignCenter);
-    label_image->setScaledContents(true);
+    label_text2->setText(tr("-- by liuweilhy@163.com"));
+    label_text2->setAlignment(Qt::AlignCenter);
 
     // 布局
     vLayout->addLayout(hLayout);
     hLayout->addWidget(label_icon1);
     hLayout->addWidget(label_icon2);
     hLayout->addWidget(label_text);
-    vLayout->addWidget(label_image);
+    vLayout->addWidget(label_text2);
     // 运行对话框
     dialog->exec();
 
@@ -799,3 +841,4 @@ void NineChessWindow::on_actionAbout_A_triggered()
     dialog->disconnect();
     delete dialog;
 }
+

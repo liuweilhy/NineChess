@@ -1,0 +1,12 @@
+root = true
+
+[*.{h,hpp,hxx,hh,c,cc,cpp,cxx,inl,ipp}]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+
+[{*.pro,*.pri,*.vcxproj,*.vcxproj.filters,*.vcxproj.user,*.props,*.targets,*.sln,*.ui,*.qrc,*.rc,*.md,*.toml,*.ini}]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+

@@ -1,0 +1,26 @@
+# Normalize Windows project text files to CRLF in the working tree.
+*.c text eol=crlf
+*.cc text eol=crlf
+*.cpp text eol=crlf
+*.cxx text eol=crlf
+*.h text eol=crlf
+*.hh text eol=crlf
+*.hpp text eol=crlf
+*.hxx text eol=crlf
+*.inl text eol=crlf
+*.ipp text eol=crlf
+*.pro text eol=crlf
+*.pri text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.vcxproj.user text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf
+*.sln text eol=crlf
+*.ui text eol=crlf
+*.qrc text eol=crlf
+*.rc text eol=crlf
+*.md text eol=crlf
+*.toml text eol=crlf
+*.ini text eol=crlf
+

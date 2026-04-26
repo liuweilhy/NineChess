@@ -1,5 +1,4 @@
-﻿#ifndef NINECHESSWINDOW_H
-#define NINECHESSWINDOW_H
+#pragma once
 
 #include <QtWidgets/QMainWindow>
 #include <QTextStream>
@@ -82,4 +81,3 @@ private:
     QTimer autoRunTimer;
 };
 
-#endif // NINECHESSWINDOW_H
