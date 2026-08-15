@@ -21,12 +21,30 @@
     <ClCompile Include="..\NineChess\src\ninechess.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="..\NineChess\src\ninechess_ai_ab.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\NineChess\src\ninechess_book.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\NineChess\src\ninechess_symmetry.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\NineChess\src\ninechess.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\NineChess\src\ninechess_common.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NineChess\src\ninechess_ai_ab.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NineChess\src\ninechess_book.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NineChess\src\ninechess_symmetry.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

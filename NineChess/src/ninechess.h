@@ -27,6 +27,8 @@ class NineChess
 {
     // AI 搜索类需要直接访问内部辅助表和局面数据。
     friend class NineChess_AI_AB;
+    // 对称变换工具（AI 置换表与开局库共用）需要访问线表与变换接口。
+    friend class NineChessSymmetry;
 
 public:
     // 从公共头中导出常用类型，减少外部书写成本。

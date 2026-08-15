@@ -14,7 +14,7 @@
     <ProjectGuid>{B0143907-0EE6-3EF5-94FE-728FE9FE5D32}</ProjectGuid>
     <RootNamespace>NineChess</RootNamespace>
     <Keyword>QtVS_v304</Keyword>
-    <WindowsTargetPlatformVersion>10.0.22621.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.22621.0</WindowsTargetPlatformMinVersion>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
     <ProjectName>NineChess</ProjectName>
@@ -215,6 +215,8 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\ninechess.cpp" />
     <ClCompile Include="src\ninechess_ai_ab.cpp" />
+    <ClCompile Include="src\ninechess_book.cpp" />
+    <ClCompile Include="src\ninechess_symmetry.cpp" />
     <ClCompile Include="src\ninechesswindow.cpp" />
     <ClCompile Include="src\pieceitem.cpp" />
   </ItemGroup>
@@ -228,7 +230,9 @@
     <QtMoc Include="src\manuallistview.h" />
     <ClInclude Include="src\ninechess.h" />
     <ClInclude Include="src\ninechess_ai_ab.h" />
+    <ClInclude Include="src\ninechess_book.h" />
     <ClInclude Include="src\ninechess_common.h" />
+    <ClInclude Include="src\ninechess_symmetry.h" />
     <QtMoc Include="src\ninechesswindow.h" />
     <QtMoc Include="src\pieceitem.h" />
   </ItemGroup>

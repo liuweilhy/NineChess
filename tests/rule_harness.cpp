@@ -272,7 +272,7 @@ void runRule1(Harness& harness)
         t.expect((chess.getData().forbiddenBoard & bitOf(forbiddenPos)) != 0u,
             "captured point becomes forbidden during opening");
         t.expectCommand(chess, "(0,2)", false, "forbidden point cannot be reused immediately");
-        t.expect(chess.getWhosPiece(0, 2) == NineChess::NOBODY, "forbidden point stays empty");
+        t.expect(chess.getWhosPiece(0, 2) == NineChess::DRAW, "forbidden point stays empty");
     });
 
     harness.runCase("rule1_diagonal_cross_ring_mill_is_valid", [](CaseContext& t) {

@@ -148,11 +148,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\NineChess\src\ninechess.cpp" />
+    <ClCompile Include="..\NineChess\src\ninechess_ai_ab.cpp" />
+    <ClCompile Include="..\NineChess\src\ninechess_book.cpp" />
+    <ClCompile Include="..\NineChess\src\ninechess_symmetry.cpp" />
     <ClCompile Include="ninechessconsole.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\NineChess\src\ninechess_ai_ab.h" />
+    <ClInclude Include="..\NineChess\src\ninechess_book.h" />
     <ClInclude Include="..\NineChess\src\ninechess_common.h" />
     <ClInclude Include="..\NineChess\src\ninechess.h" />
+    <ClInclude Include="..\NineChess\src\ninechess_symmetry.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

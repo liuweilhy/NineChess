@@ -81,6 +81,12 @@
     <ClCompile Include="src\ninechess_ai_ab.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ninechess_book.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninechess_symmetry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\ninechesswindow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -116,7 +122,13 @@
     <ClInclude Include="src\ninechess_ai_ab.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\ninechess_book.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\ninechess_common.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninechess_symmetry.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="src\ninechesswindow.h">

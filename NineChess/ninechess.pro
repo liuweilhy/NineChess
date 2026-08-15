@@ -29,6 +29,8 @@ SOURCES += \
     src/gameview.cpp \
     src/ninechess.cpp \
     src/ninechess_ai_ab.cpp \
+    src/ninechess_book.cpp \
+    src/ninechess_symmetry.cpp \
     src/ninechesswindow.cpp \
     src/pieceitem.cpp \
     src/aithread.cpp
@@ -41,6 +43,8 @@ HEADERS  += \
     src/ninechess_common.h \
     src/ninechess.h \
     src/ninechess_ai_ab.h \
+    src/ninechess_book.h \
+    src/ninechess_symmetry.h \
     src/ninechesswindow.h \
     src/pieceitem.h \
     src/manuallistview.h \
