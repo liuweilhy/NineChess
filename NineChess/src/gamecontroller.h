@@ -1,6 +1,6 @@
 /****************************************************************************
-** GameController - 娓告垙鎺у埗鍣?
-** MVC 妯″瀷涓殑鎺у埗妯″潡锛岃礋璐ｅ崗璋冭鍥句笌妯″瀷
+** GameController - 游戏控制器实现
+** 负责游戏流程控制、棋子显示、AI管理、计时和音效
 ****************************************************************************/
 
 #pragma once
@@ -34,9 +34,18 @@ public:
     int getRuleNo() const { return ruleNo; }
     int getTimeLimit() const { return timeLimit; }
     int getStepsLimit() const { return stepsLimit; }
+    // 终局胜者：未分胜负返回 NOBODY，平局返回 DRAW
+    NineChess::Players getWinner() const { return chess.getWinner(); }
+    // 本局是否由外部裁定结束（超时判负没有命令记录，保存棋谱时需补写结果命令）
+    bool isEndedByAdjudication() const { return endedByAdjudication; }
     bool isAnimation() const { return hasAnimation; }
     int getDurationTime() const { return durationTime; }
+    // 当前浏览的棋谱行号（以控制器为唯一基准）
+    int browseRow() const { return currentRow; }
     QStringListModel* getManualListModel() { return &manualListModel; }
+
+    // 浏览历史局面：统一入口，交由控制器维护 currentRow
+    bool browseTo(int row);
 
     void setAiDepthTime(int depth1, int time1, int depth2, int time2);
     void getAiDepthTime(int &depth1, int &time1, int &depth2, int &time2);
@@ -46,6 +55,8 @@ signals:
     void time2Changed(const QString &time);
     void statusBarChanged(const QString &message);
     void pieceCountsChanged(const QString &player1, const QString &player2);
+    // 浏览行号或棋谱行数变化后通知界面同步（以控制器 currentRow 为唯一基准）
+    void browseRowChanged(int row);
 
 public slots:
     void setRule(int ruleNo, int stepLimited = -1, int timeLimited = -1);
@@ -75,7 +86,7 @@ public slots:
 
 protected:
     void timerEvent(QTimerEvent *event);
-    void playSound(const QString &soundPath);
+    virtual void playSound(const QString &soundPath);
     void refreshTimeDisplays();
 
 private:
@@ -104,6 +115,9 @@ private:
     static int64_t currentTimeMS();
     const AiThread* aiSourceFromSender() const;
     AiDispatchState& aiDispatchState(const AiThread* sourceAi);
+    // 停止 AI 线程并等待其完全退出（Qt 在线程结束时复位中断标志，
+    // 因此 stop()+wait() 之后可以安全地重新 start()）
+    void stopAndWaitAi(AiThread &ai);
     bool executeCommandInternal(const QString &cmd, bool update, const AiThread *sourceAi);
     void onAiCalcStarted();
     void dispatchPendingAiCommand(const AiThread *sourceAi, uint64_t sequence);
@@ -123,8 +137,21 @@ private:
     bool applyStepLimit(NineChess::Players previousTurn);
     void handleTimeout();
 
+    // 历史局面快照：historyStates[i] = 已应用 i 条命令后的局面。
+    // 只含模型自身状态（位棋盘、编号层、三连历史、命令历史等，总计 KB 量级），
+    // 不含 AI 的置换表等搜索状态；模型命令的原子性本身也依赖 NineChess 拷贝。
+    void resetHistorySnapshots();
+    void appendHistorySnapshot();
+    int historyStateIndexForRow(int row) const;
+
+    // 棋局模型（真值）。historyStates 为其逐手快照，供历史浏览 O(1) 跳转与悔棋回退。
     NineChess chess;
-    NineChess chessTemp;
+    QVector<NineChess> historyStates;
+
+    // 走子路径通过 syncManualListFromChess 自动推进浏览行时置位：
+    // 该链路触发的 phaseChange 不重放音效（音效由走子路径唯一负责），
+    // 避免同一 QSoundEffect 在同一事件里被连续 play() 两次互相打断而偶发无声。
+    bool skipNextBrowseSound = false;
 
     AiThread ai1;
     AiThread ai2;
@@ -156,6 +183,8 @@ private:
     int64_t player2ElapsedMS;
     int64_t turnStartTimeMS;
     NineChess::Players forcedAiTimeoutTurn;
+    // 本局是否由外部裁定结束（超时判负）；gameReset 清除
+    bool endedByAdjudication = false;
 
     QString message;
     QStringListModel manualListModel;

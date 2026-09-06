@@ -240,6 +240,10 @@ void NineChessWindow::initialize()
     // 第一次需手动初始化选中listView第一项
     //qDebug() << ui.listView->model();
     ui.listView->setCurrentIndex(ui.listView->model()->index(0, 0));
+    // 浏览行号以控制器 currentRow 为唯一基准：
+    // 控制器发出 browseRowChanged 后，由窗口统一回刷选中行与导航键状态
+    connect(game, &GameController::browseRowChanged,
+        this, &NineChessWindow::onBrowseRowChanged);
     // 初始局面、前一步、后一步、最终局面的槽
     connect(ui.actionBegin_S, &QAction::triggered,
         this, &NineChessWindow::on_actionRowChange);
@@ -252,8 +256,8 @@ void NineChessWindow::initialize()
     // 手动在listView里选择招法后更新的槽
     connect(ui.listView, &ManualListView::currentChangedSignal,
         this, &NineChessWindow::on_actionRowChange);
-    // 更新四个键的状态
-    on_actionRowChange();
+    // 初始化导航键状态
+    onBrowseRowChanged(game->browseRow());
 }
 
 void NineChessWindow::ruleInfo()
@@ -265,7 +269,7 @@ void NineChessWindow::ruleInfo()
     if (s > 0)
         sl = " 限" + QString::number(s) + "步";
     if (t > 0)
-        tl = " 限时" + QString::number(s) + "分";
+        tl = " 限时" + QString::number(t) + "分";
 
     // 规则显示
     ui.labelRule->setText(tl + sl);
@@ -412,6 +416,7 @@ void NineChessWindow::on_actionOpen_O_triggered()
             // 定义新对话框
             QMessageBox msgBox(QMessageBox::Warning, tr("文件过大"), tr("不支持1MB以上文件"), QMessageBox::Ok);
             msgBox.exec();
+            file.setFileName(QString());
             return;
         }
 
@@ -419,29 +424,93 @@ void NineChessWindow::on_actionOpen_O_triggered()
         bool isok = file.open(QFileDevice::ReadOnly | QFileDevice::Text);
         if (isok)
         {
+            // 先把棋谱整体读入内存再回放，避免半路失败留下两盘棋混合的局面。
+            // 保持 file 处于打开状态，“保存”时仍写回同一文件（与原行为一致）。
+            QStringList commands;
+            QTextStream textStream(&file);
+            textStream.setCodec("UTF-8");
+            while (!textStream.atEnd())
+                commands.append(textStream.readLine());
+
             // 取消AI设定
             ui.actionEngine1_T->setChecked(false);
             ui.actionEngine2_R->setChecked(false);
-            // 读文件
-            QTextStream textStream(&file);
-            QString cmd;
-            cmd = textStream.readLine();
-            // 读取并显示棋谱时，不必刷新棋局场景
-            if(!(game->command(cmd,false))) {
-                // 定义新对话框
-                QMessageBox msgBox(QMessageBox::Warning, tr("文件错误"), tr("不是正确的棋谱文件"), QMessageBox::Ok);
-                msgBox.exec();
-                return;
-            }
-            while (!textStream.atEnd())
+
+            // 棋谱是命令流，逐条执行即可：首行可为对局配置命令 r<s<t<
+            //（由控制器识别，切换规则并恢复限时限步），老格式棋谱没有配置行，
+            // 按当前规则回放。无论哪种格式都先重开一局再回放。
+            // 回放前后按实际规则同步菜单勾选与限时限步标签
+            const auto syncRuleUi = [this]() {
+                ruleNo = game->getRuleNo();
+                for (QAction *action : ruleActionList)
+                    action->setChecked(false);
+                ruleActionList.at(ruleNo)->setChecked(true);
+                ruleInfo();
+            };
+
+            game->gameReset();
+            for (const QString &cmd : commands)
             {
-                cmd = textStream.readLine();
-                game->command(cmd, false);
+                if (!cmd.trimmed().isEmpty() && !game->command(cmd, false))
+                {
+                    // 定义新对话框
+                    QMessageBox msgBox(QMessageBox::Warning, tr("文件错误"), tr("不是正确的棋谱文件"), QMessageBox::Ok);
+                    msgBox.exec();
+                    // 回放失败不留残局，也不关联这个坏文件
+                    game->gameReset();
+                    syncRuleUi();
+                    file.close();
+                    file.setFileName(QString());
+                    return;
+                }
             }
-            // 最后刷新棋局场景
+            syncRuleUi();
+
+            // 最后刷新棋局场景；浏览行号已随命令推进到末行，
+            // 列表选中行与导航键状态由 browseRowChanged 统一回刷
             game->updateScence();
         }
+        else
+        {
+            file.setFileName(QString());
+        }
     }
+}
+
+// 把当前对局写入已关联的棋谱文件：棋谱是命令流，
+// 首行为对局配置命令 r<s<t<（规则与限时限步，0 表示不限制），
+// 之后每行一条走子命令；本局由外部裁定结束（超时判负）时
+// 末尾补写负方认输命令，使回放能到达同一终局。
+bool NineChessWindow::writeGameRecord()
+{
+    // 打开文件,只写方式打开
+    bool isok = file.open(QFileDevice::WriteOnly | QFileDevice::Text);
+    if (!isok)
+        return false;
+
+    // 写文件；统一按 UTF-8（无 BOM）写出
+    QTextStream textStream(&file);
+    textStream.setCodec("UTF-8");
+    // 首行：对局配置命令（负值没有意义，钳为 0=不限）
+    textStream << QStringLiteral("r%1s%2t%3")
+        .arg(game->getRuleNo())
+        .arg(qMax(0, game->getStepsLimit()))
+        .arg(qMax(0, game->getTimeLimit()))
+        << "\n";
+    // 招法命令行
+    QStringListModel *strlist = qobject_cast<QStringListModel *>(ui.listView->model());
+    for (QString cmd : strlist->stringList())
+        textStream << cmd << "\n";
+    // 超时判负没有命令记录，补写负方认输命令（-0 先手负 / -1 后手负）
+    if (game->isEndedByAdjudication()) {
+        const NineChess::Players winner = game->getWinner();
+        if (winner == NineChess::PLAYER1)
+            textStream << "-1" << "\n";
+        else if (winner == NineChess::PLAYER2)
+            textStream << "-0" << "\n";
+    }
+    textStream.flush();
+    return true;
 }
 
 void NineChessWindow::on_actionSave_S_triggered()
@@ -449,17 +518,7 @@ void NineChessWindow::on_actionSave_S_triggered()
     if (file.isOpen())
     {
         file.close();
-        // 打开文件,只写方式打开
-        bool isok = file.open(QFileDevice::WriteOnly | QFileDevice::Text);
-        if (isok)
-        {
-            // 写文件
-            QTextStream textStream(&file);
-            QStringListModel *strlist = qobject_cast<QStringListModel *>(ui.listView->model());
-            for (QString cmd : strlist->stringList())
-                textStream << cmd << endl;
-            file.flush();
-        }
+        writeGameRecord();
     }
     else
         on_actionSaveAs_A_triggered();
@@ -477,21 +536,10 @@ void NineChessWindow::on_actionSaveAs_A_triggered()
         saveLastManualDirectory(path);
         if (file.isOpen())
             file.close();
-        //文件对象  
+        //文件对象
         file.setFileName(path);
-        //打开文件,只写方式打开
-        bool isok = file.open(QFileDevice::WriteOnly | QFileDevice::Text);
-        if (isok)
-        {
-            //写文件
-            QTextStream textStream(&file);
-            QStringListModel *strlist = qobject_cast<QStringListModel *>(ui.listView->model());
-            for (QString cmd : strlist->stringList())
-                textStream << cmd << endl;
-            file.flush();
-        }
+        writeGameRecord();
     }
-
 }
 
 void NineChessWindow::on_actionEdit_E_toggled(bool arg1)
@@ -522,142 +570,67 @@ void NineChessWindow::on_actionInvert_I_toggled(bool arg1)
     game->setInvert(arg1);
 }
 
-// 前后招的公共槽
+// 前后招的公共槽：把目标行号交给控制器，界面同步由 browseRowChanged 统一回刷
 void NineChessWindow::on_actionRowChange()
 {
     QAbstractItemModel * model = ui.listView->model();
+    if (!model)
+        return;
     int rows = model->rowCount();
-    int currentRow = ui.listView->currentIndex().row();
+    int targetRow = ui.listView->currentIndex().row();
 
     QObject * const obsender = sender();
-    if (obsender != nullptr) {
-        if (obsender == ui.actionBegin_S) {
-            ui.listView->setCurrentIndex(model->index(0, 0));
-        }
-        else if (obsender == ui.actionPrevious_B) {
-            if (currentRow > 0) {
-                ui.listView->setCurrentIndex(model->index(currentRow - 1, 0));
-            }
-        }
-        else if (obsender == ui.actionNext_F) {
-            if (currentRow < rows - 1) {
-                ui.listView->setCurrentIndex(model->index(currentRow + 1, 0));
-            }
-        }
-        else if (obsender == ui.actionEnd_E) {
-            ui.listView->setCurrentIndex(model->index(rows - 1, 0));
-        }
-        currentRow = ui.listView->currentIndex().row();
+    if (obsender == ui.actionBegin_S) {
+        targetRow = 0;
+    }
+    else if (obsender == ui.actionPrevious_B) {
+        targetRow = qMax(0, targetRow - 1);
+    }
+    else if (obsender == ui.actionNext_F) {
+        targetRow = qMin(rows - 1, targetRow + 1);
+    }
+    else if (obsender == ui.actionEnd_E) {
+        targetRow = rows - 1;
     }
 
-    // 更新动作状态
-    if (rows <= 1) {
-        ui.actionBegin_S->setEnabled(false);
-        ui.actionPrevious_B->setEnabled(false);
-        ui.actionNext_F->setEnabled(false);
-        ui.actionEnd_E->setEnabled(false);
-        ui.actionAutoRun_A->setEnabled(false);
-    }
-    else {
-        if (currentRow <= 0) {
-            ui.actionBegin_S->setEnabled(false);
-            ui.actionPrevious_B->setEnabled(false);
-            ui.actionNext_F->setEnabled(true);
-            ui.actionEnd_E->setEnabled(true);
-            ui.actionAutoRun_A->setEnabled(true);
-        }
-        else if (currentRow >= rows - 1)
-        {
-            ui.actionBegin_S->setEnabled(true);
-            ui.actionPrevious_B->setEnabled(true);
-            ui.actionNext_F->setEnabled(false);
-            ui.actionEnd_E->setEnabled(false);
-            ui.actionAutoRun_A->setEnabled(false);
-        }
-        else
-        {
-            ui.actionBegin_S->setEnabled(true);
-            ui.actionPrevious_B->setEnabled(true);
-            ui.actionNext_F->setEnabled(true);
-            ui.actionEnd_E->setEnabled(true);
-            ui.actionAutoRun_A->setEnabled(true);
-        }
-    }
-
-    // 更新局面
-    game->phaseChange(currentRow);
-
-    /* 下面的代码全部取消，改用QTimer的方式实现
-    // 更新局面
-    bool changed = game->phaseChange(currentRow);
-    // 处理自动播放时的动画
-    if (changed && game->isAnimation()) {
-        // 不使用processEvents函数进行非阻塞延时，频繁调用占用CPU较多
-        //QElapsedTimer et;
-        //et.start();
-        //while (et.elapsed() < waitTime) {
-        //    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
-        //}
-
-        int waitTime = game->getDurationTime() + 50;
-        // 使用QEventLoop进行非阻塞延时，CPU占用低
-        QEventLoop loop;
-        QTimer::singleShot(waitTime, &loop, SLOT(quit()));
-        loop.exec();
-    }
-    */
+    if (targetRow >= 0 && targetRow < rows)
+        game->browseTo(targetRow);
 }
 
+// 控制器浏览行号/棋谱行数变化后的统一同步：
+// 选中 listView 对应行，并按行号位置更新导航键与自动运行键的可用状态
+void NineChessWindow::onBrowseRowChanged(int row)
+{
+    QAbstractItemModel * model = ui.listView->model();
+    if (!model)
+        return;
+    int rows = model->rowCount();
+
+    if (row >= 0 && row < rows && ui.listView->currentIndex().row() != row)
+        ui.listView->setCurrentIndex(model->index(row, 0));
+
+    const bool canBrowse = rows > 1;
+    ui.actionBegin_S->setEnabled(canBrowse && row > 0);
+    ui.actionPrevious_B->setEnabled(canBrowse && row > 0);
+    ui.actionNext_F->setEnabled(canBrowse && row < rows - 1);
+    ui.actionEnd_E->setEnabled(canBrowse && row < rows - 1);
+    ui.actionAutoRun_A->setEnabled(canBrowse && row < rows - 1);
+}
+
+// 自动运行定时处理函数
 void NineChessWindow::onAutoRunTimeOut(QPrivateSignal signal)
 {
     Q_UNUSED(signal)
     int rows = ui.listView->model()->rowCount();
     int currentRow = ui.listView->currentIndex().row();
 
-    if (rows <= 1) {
+    if (rows <= 1 || currentRow >= rows - 1) {
         ui.actionAutoRun_A->setChecked(false);
         return;
     }
 
-    // 执行“下一招”
-    if (currentRow < rows - 1)
-    {
-        if (currentRow < rows - 1)
-        {
-            ui.listView->setCurrentIndex(ui.listView->model()->index(currentRow + 1, 0));
-        }
-        currentRow = ui.listView->currentIndex().row();
-        // 更新动作状态
-        if (currentRow <= 0) {
-            ui.actionBegin_S->setEnabled(false);
-            ui.actionPrevious_B->setEnabled(false);
-            ui.actionNext_F->setEnabled(true);
-            ui.actionEnd_E->setEnabled(true);
-            ui.actionAutoRun_A->setEnabled(true);
-        }
-        else if (currentRow >= rows - 1)
-        {
-            ui.actionBegin_S->setEnabled(true);
-            ui.actionPrevious_B->setEnabled(true);
-            ui.actionNext_F->setEnabled(false);
-            ui.actionEnd_E->setEnabled(false);
-            ui.actionAutoRun_A->setEnabled(false);
-        }
-        else
-        {
-            ui.actionBegin_S->setEnabled(true);
-            ui.actionPrevious_B->setEnabled(true);
-            ui.actionNext_F->setEnabled(true);
-            ui.actionEnd_E->setEnabled(true);
-            ui.actionAutoRun_A->setEnabled(true);
-        }
-
-        // 更新局面
-        game->phaseChange(currentRow);
-    }
-    else {
-        ui.actionAutoRun_A->setChecked(false);
-    }
+    // 执行“下一招”，选中行与导航键状态由 browseRowChanged 统一刷新
+    game->browseTo(currentRow + 1);
 }
 
 // 自动运行

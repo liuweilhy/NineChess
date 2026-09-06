@@ -20,6 +20,7 @@
 - Built-in rules are `0 ChengSanQi`, `1 DaSanQi (12-piece)`, `2 JiuLianQi` (default), and `3 Nine Men's Morris`.
 - Core and console coordinates are 0-based: `c=0..2`, `p=0..7`.
 - Command text conventions are `(c,p)`, `(c1,p1)->(c2,p2)`, `-(c,p)`, `-0`, `-1`, and `==`.
+- The game-setup command `r<rule>s<steps>t<minutes>` (e.g. `r2s100t10`, segments optional in any order, `0` = unlimited) records rule and time/step limits at the head of saved game records. It is parsed by `parseSetupCommand()` in the core, applied by `GameController` and `NineChessConsole`; the model itself does not enforce limits. Records are pure command streams; a timeout loss is written as the loser's `-0`/`-1` on save.
 
 ## AI Notes
 

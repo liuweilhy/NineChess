@@ -83,6 +83,7 @@ GAME_NOTSTARTED ──start()──▶ GAME_OPENING(PLACE, P1)
 ## 6. 命令体系
 
 走子命令：`(c,p)` 落子/选子、`(c1,p1)->(c2,p2)` 走子、`-(c,p)` 提子、`-0`/`-1` 认输、`==` 判和；另有 `giveup/resign/draw` 文本命令。GUI 棋谱、AI 出招、Console 回放全部复用这套文本格式。
+对局配置命令 `r<规则>s<限步>t<限时分钟>`（如 `r2s100t10`，段可省略、顺序不限，0=不限）：棋谱首行用它记录规则与限时限步，由 `parseSetupCommand()`（`ninechess.h`，核心层）解析、控制层与 Console 识别应用；模型不感知限时限步。棋谱因此保持纯命令流；超时判负保存时补写负方 `-0`/`-1`。
 
 ## 7. 架构与文件地图
 
@@ -110,15 +111,26 @@ D:\My program\QT\NineChess\
 ### 8.1 搜索流程
 
 - Alpha-Beta + 迭代加深（1..depth），外部 `quit()`（原子标志）可中断；中断时保留上一层完整结果作为 `bestMove()`。
-- 走法三类：`MOVE_PLACE / MOVE_SHIFT / MOVE_CAPTURE`；apply/undo 用快照（`ChessData + winner + selectedPos`）恢复。
+- 走法三类：`MOVE_PLACE / MOVE_SHIFT / MOVE_CAPTURE`；apply/undo 用逐字段快照（status、三块位棋盘、编号层、`millHistory` 只记长度回滚）恢复，编号规则不再每节点两次堆分配。
+- PVS：非首走法先以零宽窗口试探，落回窗口内才全窗口重搜（实测开局节点 -28%，中局收益小）。
+- `dynamicDepth`（默认开）：中局根局面在指定深度上追加 2 层，均衡开局/中局耗时（中局分支数约为开局 1/3，等深度节点数差百倍）。
 - 根节点 `searchRoot` 与普通节点 `search` 分离；根节点记录最佳走法。
 - 搜索状态在 `SearchContext` 中（每线程一份工作局面 + 杀手/历史/统计），类成员只保留只读共享数据（根局面、对称表、停止标志、时间预算），Lazy SMP 多线程安全。
+- 置换表键每节点只计算一次，probe/store 共用（canonical 模式一次 16 视角哈希）。
 
 ### 8.2 置换表
 
-- 按规则分 4 个全局 `TTStore`（同规则所有 AI 实例共享，`std::unordered_map<uint64_t, TTEntry>` + 整表 `std::mutex`），上限 256K 条目，满时按"世代老化 > 非精确值 > 浅深度"清理。
-- 条目：value/depth/flag(EXACT|LOWER|UPPER)/generation；probe 时 `entry.depth >= depth` 才可用；store 时深度大的覆盖。
-- **当前 TT 不存最佳走法，也不用于走法排序**（优化点）。
+- 按规则分 4 个全局 `TTStore`：**定长桶数组**（256 分片 × 1024 桶 × 2 槽 = 512K 条），分片互斥锁；无堆分配、无"满时全量扫描排序清理"（旧 `unordered_map` 方案已废弃，旧方案每次满表触发 O(n log n) 打嗝）。
+- 键在 `makeSearchHash()` 出口统一过一次 `mix64` 雪崩——lite 哈希的位展开是稠密结构，未混合时低 18 位只取决于前几个棋盘点位的占用，直接做索引会让结构相近的局面挤进同一槽位（实测曾致节点数涨 3 倍，已修复）。
+- 条目：value/depth/flag(EXACT|LOWER|UPPER)/generation + 最佳走法（用于排序置顶）；probe 时 `entry.depth >= depth` 才可用并刷新 generation。
+- 桶内替换策略：同键维持"深度大的覆盖，浅的只刷新代数"；跨键冲突淘汰"世代更老 > 深度更浅"者。
+
+### 8.2.1 增量普通哈希（编号规则）
+
+- `getHashHard()` 已拆成组件函数（`ninechess_common.h`）：`hardHashLayerTerm`（9 编号层项）/ `hardHashHistoryTerm`（历史三连项）/ `hardHashCombine`（含 lite 基哈希与表长的最终合成）。
+- AI 在 `SearchContext` 里维护 `hardLayerAccum / hardHistoryAccum` 两个 XOR 累加器：`applyMove` 按层差量更新、`millHistory` 追加项并入；`undoMove` 从快照整体恢复；`board = m_root` 处调用 `resetHardHashAccum()` 全量重建。
+- `makePlainHash` = 重算 lite（十几次位运算）+ 累加器合成，与 `getHashHard()` **逐位一致**（实测 5 个局面节点数/TT 统计完全相同），编号规则每节点省去 9 层 + 历史表全量重算。
+- 校验兜底：常态每 2048 节点全量比对一次，`selfcheck` 命令逐节点比对（4 规则随机自对弈，失败即中止并报告）；比对失败说明差量维护有漏洞，会立即中止搜索而不是静默污染置换表。
 
 ### 8.3 对称归一化
 
@@ -129,11 +141,17 @@ D:\My program\QT\NineChess\
 
 ### 8.4 估值（`evaluate()`）
 
+- 权重集中于 `EvalWeights` 结构 + 按规则静态表 `s_evalWeightsPerRule[RULE_COUNT]`（四行初始值相同，调参按行独立进行）；`SearchOptions.stalematePressureWeight >= 0` 可覆盖闷杀项（vs 的 `sp` 参数）。
 - 开局：在盘×120 + 手牌差×48 + 三连×96 + 活二×24
 - 中局：在盘×180 + 三连×112 + 活二×32 + 机动性×10
 - 提子阶段：pendingCaptures ×（开局 160 / 中局 220），按轮次正负
+- 胜利临近压力（`winPressureWeight`，默认 150；实测 60 局 A/B 8:2，`0` 关闭）：对手"在盘+手牌"总数 ≤ 判负线+2 时逐子加分
+- 被闷杀压力（权重表 `stalematePressure`，默认 0）：中局对手机动性 ≤3 时每少一步加分（blockedIsLoss 规则收益最大）
+- 双三连威胁（权重表 `forkThreat`，默认 0）：活二"成三点"去重计数，≥2 时每多 1 点加一份分；A/B 实测 ft=80 规则 2 上 0:4、规则 0 上 5:7——直棋威胁可被提子拆除，项偏负，保持 0（`vs` 的 `ft` 参数可继续实验）
+- **tune 命令**：按规则坐标下降自动调参（每列若干候选、引擎2=候选 vs 引擎1=当前行、交替执先），结束与原始行做终局验证并打印可回贴的行；`th` 参数默认自动线程（14 线程下 24 局/候选约 40 分钟）。三轮战役（8/16/24 局每候选，终局验证 46%/53%/51%）均不显著——原始权重行守擂成功；深度 8 下对局约九成平局，单局信息量低，进一步的调参收益需要海量对局（SPSA 式）或更强的评估项而非更多扫描轮次。
+- 热路径结构：可提三连/活二**单遍**线扫描（`countMillsAndOpenMills`），位棋盘/占用掩码每节点算一次共享；插桩实测中局评估占搜索时间约 22%、开局 6~7%，合并扫描后中局 NPS +10%
 - 胜负分 ±30000（按 ply 衰减），边界 ±32000；`clampScore` 收敛
-- 注意：**编号规则下三连计数不区分"可提/已提"**（millHistory 只进哈希不进估值），重复成三会被高估
+- 注意：**编号规则下三连计数不区分"可提/已提"**（millHistory 只进哈希不进估值）的问题已修复（可提三连剔除已登记项）
 
 ### 8.5 走法排序（`orderMoves` / 静态启发）
 
@@ -145,7 +163,7 @@ D:\My program\QT\NineChess\
 ## 9. NineChessConsole（`NineChessConsole\ninechessconsole.cpp`）
 
 - 启动：`NineChessConsole.exe [规则号]` 或 `--rule N`；默认规则 2。
-- 走子命令同第 6 节；附加命令：`board / history / undo / new / rules / rule N / help / quit`。
+- 走子命令同第 6 节；附加命令：`board / history / undo / new / rules / rule N / r<s<t<（对局配置，仅记录不计时）/ help / quit`。
 - 维护 undo 栈；每次成功命令后打印棋盘（`getConsoleText`，含阶段/手牌/在盘/待提/选中/提示/历史三连）。
 - **已链接 AI**（`ninechess_ai_ab.cpp` 加入工程，无 Qt 依赖），并提供 `search / match / vs` 三个 AI 命令（详见第 13 节）。
 
@@ -172,21 +190,25 @@ D:\My program\QT\NineChess\
 5. ~~无统计能力~~（已完成：节点/NPS/TT 命中/剪枝计数，`search` 命令可见）。
 6. ~~TT 整表互斥锁 + 跨实例共享~~（已改为 256 分片锁，多线程与双 AI 对弈不再互相阻塞）。
 7. 评估系数为魔数：开局/中局权重写死；点位价值权重已参数化（`pv` 参数，默认 16），其余系数仍待调参脚本。
-8. 无 quiescence、无 aspiration window（根窗口恒为 ±INF）；无重复局面检测（长对局靠步数上限截断为平局，与 GUI 限步一致）。
+8. 无 aspiration window（根窗口恒为 ±INF）→ 已完成（渐进放宽 300→900→全窗口；估值跨层跳变大，收益约 0.3%，保留）；无重复局面检测 → 已完成（搜索内 2/4/6/8 层重复惩罚）。
 9. 开局库已完成（基于自对弈统计、按规则独立、16 对称规范化压缩，见第 15 节）；残局库未做。
 10. 根节点随机选择已完成（精确打分 + 分差阈值 + softmax 加权，种子可复现）；默认分差 60。
-11. Lazy SMP 多线程已完成（`threads` 参数，实测 4 线程 NPS 约 3 倍、同时间预算多完成一层深度）；Root Split 未做。
-12. 观察到的强度问题（待调参验证）：pv=16 下先手优势明显（深度 5~7 自对弈先手胜多）；深度 ≤7 的对局大量以步数上限平局收场，引擎偏保守，残局转化偏慢。
+11. Lazy SMP 多线程已完成（`threads` 参数）；默认线程数已改为按 CPU 核数自动推导（`defaultThreadCount()`：>=5 核留 2 核、<=4 核留 1 核、封顶 16），GUI 缺省即用。
+12. ~~引擎偏保守 / 平局率高~~（部分缓解：新增 `winPressureWeight` 胜利临近压力分，对手总子数逼近判负线时逐子加分；实测 60 局对抗 8:2 压制关闭方，默认 150，`wp=0` 可关）。
 13. Aspiration 窗口已完成（渐进放宽：300 → 900 → 全窗口；实测固定深度省约 0.3% 节点、走法/估值与关闭时一致；本游戏估值跨层跳变大，收益有限但仍保留）。
 14. 重复局面惩罚已完成（搜索内 2/4/6/8 层重复 → 当前轮次 ±penalty，统计见 `repetitionHits`；实测机制在搜索中频繁触发，但长漂移型平局（周期 > 搜索深度）不受影响）。
 15. 静默搜索已完成（深度 0 展开"形成三连/提子"链，stand-pat + 战术走法；实测修正地平线高估：-914 → -1094；默认开启；与多线程兼容）。
-16. 新增 SearchOptions：`aspirationWindows / repetitionPenalty / quiescenceSearch`；console `search` 增加 `a / rep / q` 参数。
+16. 新增 SearchOptions：`dynamicDepth`（中局根局面 +2 层，默认开）、`winPressureWeight`（胜利临近压力分，默认 0）、`pvSearch`（PVS 零宽试探，实测开局节点 -28%，默认开）。
+17. 搜索快照/哈希开销已优化：逐字段快照 + `millHistory` 长度回滚（编号规则不再每节点两次堆分配，NPS +76%）、置换表键每节点一次（canonical 模式 NPS 再提升）。
+18. 剩余优化方向：~~TT 为 `unordered_map` + 互斥锁~~（已完成：定长桶数组 + 雪崩混键，实测 NPS +21~56%、大搜索节点数还降 13~29%）；~~编号规则 hard 哈希每节点全量重算~~（已完成：层项/历史项增量累加，`makePlainHash` 与全量重算逐位一致，规则 2 中局 NPS +9%；剩余大头是 canonical 开局的 16 视角 × 视图哈希，属第 3 步"全量增量"范畴）；估值系数系统性调参（`tests/Run-MatchBattery.ps1`，`vs` 已支持奇偶局交替执先 + `wp` 单侧参数）。
 
 ## 13. Console 新增命令（AI 调试）
-- `search [d] [t] [h] [r] [g] [th] [s] [pv] [a] [rep] [q]`：单局面搜索，打印最佳走法、估值、深度、耗时、节点、NPS、TT 统计、重复命中、根走法分数（随机模式下为精确候选集）。
-- `match [n] [d] [h] [r] [th] [s] [mp]`：同配置自对弈 n 局，报告胜负/步数/节点/NPS。
-- `vs [n] [d1] [h1] [pv1] [d2] [h2] [pv2] [s] [a] [rep]`：不同配置引擎对抗（强度 A/B，双方均开随机）。
-- 参数：`h` 哈希模式（0 普通 / 1 仅开局规范化 / 2 全部规范化）；`r` 随机（0 关闭 / >0 开启）；`g` 随机分差；`th` 线程数（Lazy SMP）；`s` 随机种子（0 = 每次随机）；`pv` 点位价值权重（0 关闭）；`a` Aspiration 窗口；`rep` 重复惩罚（0 关闭）；`q` 静默搜索。
+- `search [d] [t] [h] [r] [g] [th] [s] [pv] [a] [rep] [q] [dd] [pvs]`：单局面搜索，打印最佳走法、估值、深度、耗时、节点、NPS、TT 统计、重复命中、根走法分数（随机模式下为精确候选集）。
+- `match [n] [d] [h] [r] [th] [s] [mp] [dd]`：同配置自对弈 n 局，报告胜负/步数/节点/NPS。
+- `vs [n] [d1] [h1] [pv1] [d2] [h2] [pv2] [s] [a] [rep] [wp] [sp] [ft]`：不同配置引擎对抗（强度 A/B）。**奇偶局交替执先**消除先手偏置；`wp`/`sp`/`ft` 只作用于引擎 2（胜利临近/闷杀/双三威胁压力分），用于评估项 A/B。
+- `tune [n] [d] [s] [r]`：按当前规则坐标下降自动调参（每列候选、对抗选值、终局验证、打印可回贴权重行）。
+- `selfcheck [n] [d]`：4 规则随机自对弈并逐节点校验增量哈希。
+- 参数：`h` 哈希模式（0 普通 / 1 仅开局规范化 / 2 全部规范化）；`r` 随机（0 关闭 / >0 开启）；`g` 随机分差；`th` 线程数（0 = 按 CPU 核数自动）；`s` 随机种子（0 = 每次随机）；`pv` 点位价值权重（0 关闭）；`a` Aspiration 窗口；`rep` 重复惩罚（0 关闭）；`q` 静默搜索；`dd` 动态深度（0 关闭，默认开）；`pvs` PVS 试探（默认开）。
 
 ## 14. 快速索引
 

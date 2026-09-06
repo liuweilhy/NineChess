@@ -35,19 +35,61 @@ public:
         FullCanonical = 2      // 全部节点用 canonical（旧行为，16 视角 × 每节点 2 次）
     };
 
+    // 按当前 CPU 逻辑核心数推导合适的默认搜索线程数：
+    // >=5 核时给系统/界面保留 2 核，<=4 核时保留 1 核，8~16 线程以上收益递减故封顶 16，
+    // 查询失败时保守返回 4。GUI 与 Console 的缺省线程数都来自这里。
+    static uint32_t defaultThreadCount();
+
+    // 按规则的评估权重表：一份结构收拢全部评估魔数，四套规则各占一行，
+    // 调参战役（tests/Run-MatchBattery.ps1）按行独立进行，互不干扰。
+    // 修改任何数值都会改变评估结果；新增评估项应同步在此表加列。
+    struct EvalWeights {
+        int32_t openingMaterial = 120;   // 开局：在盘子差
+        int32_t openingInHand = 48;      // 开局：手牌差
+        int32_t openingMill = 96;        // 开局：可提三连
+        int32_t openingOpenMill = 24;    // 开局：活二
+        int32_t midMaterial = 180;       // 中局：在盘子差
+        int32_t midMill = 112;           // 中局：可提三连
+        int32_t midOpenMill = 32;        // 中局：活二
+        int32_t midMobility = 10;        // 中局：机动性
+        int32_t captureOpening = 160;    // 提子阶段（开局）每个待提子
+        int32_t captureMid = 220;        // 提子阶段（中局）每个待提子
+        int32_t forkThreat = 0;          // 双三连威胁：≥2 个互不相同成三点的额外加分
+                                         // （成三点数每多 1 个加一份；同点双活二不算）
+        int32_t stalematePressure = 0;   // 被闷杀压力：中局对手机动性 ≤3 时每少一步的加分
+                                         // （blockedIsLoss 规则收益最大；默认 0 待 A/B 定值）
+    };
+
     // 搜索配置。setOptions() 修改后，对后续每次搜索生效。
     struct SearchOptions {
         int64_t timeLimitMs = 0;    // 每次搜索的时间预算；0 = 不限时（纯深度）
-        uint32_t threads = 1;       // 并行线程数（>=1；Lazy SMP）
+        uint32_t threads = defaultThreadCount(); // 并行线程数（>=1；Lazy SMP）
         uint32_t randomness = 0;    // 0 = 纯最优；>0 启用根节点随机（分差阈值 + 加权）
         int32_t randomGap = 60;     // 随机候选集与最优的分差阈值（估值单位）
         HashMode hashMode = HashMode::OpeningCanonical;
-        size_t ttMaxEntries = 256u * 1024u;
+        size_t ttMaxEntries = 256u * 1024u; // 置换表容量参考值；数组化后实际容量固定为
+                                            // SHARD_COUNT × SLOT_COUNT = 512K，字段仅为兼容保留
         uint64_t seed = 0;          // 随机种子；0 = 每次随机
         int32_t pointValueWeight = 16;  // 点位结构价值权重；0 = 关闭（A/B 用）
         bool aspirationWindows = true;  // 根窗口随上一迭代估值收窄，失败时渐进放宽重搜
         int32_t repetitionPenalty = 40; // 搜索内 2~8 层重复局面的惩罚分；0 = 关闭
         bool quiescenceSearch = true;   // 深度 0 时展开“形成三连/提子”的静默搜索
+        bool dynamicDepth = true;       // 中局根局面在指定深度上追加 2 层：
+                                        // 中局分支数远小于开局，等深度下耗时差百倍，
+                                        // 追加层数可把时间预算用在更难的中局上；0 关闭。
+        int32_t winPressureWeight = 150; // 胜利临近压力分：对手总子数（在盘+手牌）逼近
+                                        // 判负线时每逼近 1 子加一份压力分，促使优势方
+                                        // 主动转化而不是磨到步数上限；0 = 关闭（A/B 用）。
+                                        // 实测 60 局对抗 8:2 压制关闭方，且后手 8 连胜。
+        bool pvSearch = true;           // PVS：非首走法先以零宽窗口试探，失败高再重搜；
+                                        // 实测开局节点数 -28%（走法排序质量决定收益），中局收益小。
+        int32_t stalematePressureWeight = -1; // 被闷杀压力覆盖值；<0 = 用规则权重表默认值
+                                              // （vs 命令的 sp 参数 A/B 用）。
+        int32_t forkThreatWeight = -1;        // 双三连威胁覆盖值；<0 = 用规则权重表默认值
+                                              // （vs 命令的 ft 参数 A/B 用）。
+        // 调参/实验用：true 时以 weights 整行覆盖规则权重表（tune 命令用）。
+        bool useCustomWeights = false;
+        EvalWeights weights{};
     };
 
     // 搜索统计（原子计数，多线程搜索结束时汇总）。
@@ -102,6 +144,20 @@ public:
     // 启用随机后，列出的是精确打分阶段的候选集及其精确分数。
     std::string rootScoresText() const;
 
+    // 打开增量哈希累加器的逐节点校验（selfcheck 命令用）。
+    // 开启后每次搜索若发现累加器与全量重算不一致，会立即中止搜索，
+    // 并可通过 lastHashVerifyFailed() 查询。
+    void setHashVerification(bool enabled) { m_verifyHashAccum = enabled; }
+
+    // 最近一次搜索中增量哈希校验是否失败。
+    bool lastHashVerifyFailed() const { return m_hashVerifyFailed; }
+
+    // 读取某规则的评估权重表行（tune 命令读取基线用）。
+    static const EvalWeights& tableWeights(uint32_t ruleIndex)
+    {
+        return s_evalWeightsPerRule[ruleIndex];
+    }
+
 private:
     // AI 内部统一使用的走法类别。
     enum MoveType : uint8_t {
@@ -138,11 +194,30 @@ private:
     };
 
     struct Snapshot {
-        // 搜索中 applyMove() 会直接改写工作局面，
-        // 因此回溯时只需恢复这份最小必要状态快照。
+        // 搜索中 applyMove() 会直接改写工作局面，回溯时恢复这份最小快照。
+        // 注意：这里刻意不拷贝整个 ChessData —— 编号规则的 millHistory 是
+        // std::vector，整体拷贝会让每个搜索节点引入两次堆分配。
+        // 搜索期间 millHistory 只会被 addNewMills() 追加（见 ninechess.cpp），
+        // 因此记录进入节点时的长度、回溯时 resize 回去即可，无需拷贝内容。
 
-        // 完整局面数据。
-        NineChess::ChessData data;
+        // 打包状态（阶段/动作/轮次/手牌/待提子）。
+        uint32_t status = 0;
+
+        // 三个主位棋盘。
+        uint32_t player1Board = 0;
+        uint32_t player2Board = 0;
+        uint32_t forbiddenBoard = 0;
+
+        // 编号位棋盘（仅编号规则使用）。
+        uint32_t numberBoards[NUMBERED_PIECE_COUNT] = {};
+
+        // 走子执行前的历史三连表长度（回滚追加用）。
+        size_t millHistorySize = 0;
+
+        // 走子执行前的 hard 哈希增量累加器（仅编号规则使用），
+        // 回溯时整体恢复，保证与局面快照严格同步。
+        uint64_t hardLayerAccum = 0;
+        uint64_t hardHistoryAccum = 0;
 
         // 走法执行前的胜者缓存。
         NineChess::Players winner = NOBODY;
@@ -171,22 +246,45 @@ private:
         uint32_t generation = 0;
     };
 
-    // 置换表分片：哈希低位路由到分片，各分片独立加锁，
-    // 避免整表互斥锁成为多线程搜索的争用瓶颈。
+    // 置换表分片：哈希低位路由到分片，各分片独立加锁。
+    // 每个分片是定长桶数组，每桶 2 槽（开地址）：
+    // - 相比 unordered_map，省掉每节点的堆分配/查找开销与
+    //   旧版"分片满时全量扫描 + 排序清理"造成的搜索中途打嗝；
+    // - 键在进入置换表前统一做 mix64 雪崩（见 makeSearchHash），
+    //   否则 lite 哈希的稠密位展开会让结构相近的局面挤进同一槽位；
+    // - 冲突时按"世代老化 > 深度优先"替换，语义与旧版单键覆盖策略一致。
     struct TTStore {
         static constexpr size_t SHARD_COUNT = 256;
 
+        // 每分片桶数（1024 桶 × 2 槽 × 256 分片 = 512K 条）。
+        static constexpr size_t BUCKET_COUNT = 1024;
+        static constexpr size_t BUCKET_SLOTS = 2;
+        static_assert((BUCKET_COUNT & (BUCKET_COUNT - 1)) == 0,
+            "BUCKET_COUNT must be power of 2");
+
+        struct TTSlot {
+            // 槽位键；0 表示空槽（真实哈希为 0 的概率 2^-64，视作可随时覆盖）。
+            uint64_t key = 0;
+
+            // 该键对应的置换表条目。
+            TTEntry entry;
+        };
+
+        struct TTBucket {
+            std::array<TTSlot, BUCKET_SLOTS> slotArray;
+        };
+
         struct Shard {
             std::mutex mutex;
-            std::unordered_map<uint64_t, TTEntry> table;
+            std::array<TTBucket, BUCKET_COUNT> buckets;
         };
 
         std::array<Shard, SHARD_COUNT> shards;
 
-        // 世代号与整表清理用的小锁（与分片锁不存在嵌套顺序）。
+        // 世代号用的小锁（与分片锁不存在嵌套顺序）。
         std::mutex metaMutex;
 
-        // 当前规则置换表所在的“世代号”。
+        // 当前规则置换表所在的"世代号"。
         uint32_t generation = 0;
     };
 
@@ -262,6 +360,19 @@ private:
 
         // 本搜索线各层的局面普通哈希（重复检测用，仅浅层写入）。
         std::array<uint64_t, kMaxPly> positionHistory = {};
+
+        // 编号规则 hard 哈希的增量累加器：
+        // hardHashLayerTerm 的 XOR 累加（9 层）与 hardHashHistoryTerm 的 XOR 累加。
+        // lite 规则不使用（保持为 0）。makePlainHash 用它与重算的 lite 部分合成
+        // 与 getHashHard() 逐位一致的结果，免去每节点全量重算 9 层 + 历史表。
+        uint64_t hardLayerAccum = 0;
+        uint64_t hardHistoryAccum = 0;
+
+        // 增量哈希节流校验计数器（每 2048 个节点全量比对一次）。
+        uint32_t hashVerifyCounter = 0;
+
+        // 任一节点校验失败时置位（搜索会立即中止）。
+        bool hashVerifyFailed = false;
     };
 
 private:
@@ -356,20 +467,25 @@ private:
 
     // 查询置换表；若命中精确值或命中后足以剪枝，则返回 true。
     // 命中时通过 ttMove 返回该节点已知的最佳走法（用于排序）。
-    bool probeTransposition(SearchContext& ctx, int depth, int& alpha, int& beta,
+    // hash 由调用方用 makeSearchHash() 计算一次后传入，
+    // 避免 probe/store 各算一遍（canonical 模式下每遍要 16 次视角哈希）。
+    bool probeTransposition(SearchContext& ctx, uint64_t hash, int depth, int& alpha, int& beta,
         int& value, Move& ttMove) const;
 
     // 把当前节点结果写入置换表，同时记录该节点最佳走法。
-    void storeTransposition(SearchContext& ctx, int depth, int value, int alpha, int beta,
+    void storeTransposition(SearchContext& ctx, uint64_t hash, int depth, int value, int alpha, int beta,
         const Move& bestMove) const;
 
     // 当新的真实局面开始搜索时，切换到置换表的新 generation。
     void beginTranspositionGeneration();
 
-    // 某个分片满时执行老化清理，优先删除更老、更浅、非精确值条目。
-    void pruneTranspositionStore(TTStore::Shard& shard, size_t shardMax) const;
-
     // ==================== 哈希 ====================
+
+    // 全量重算编号规则的 hard 哈希增量累加器（局面被整体替换时调用）。
+    void resetHardHashAccum(SearchContext& ctx) const;
+
+    // 校验增量累加器与全量重算是否逐位一致（节流调用 / selfcheck 逐节点调用）。
+    bool verifyHardHashAccum(SearchContext& ctx) const;
 
     // 按当前哈希模式返回本节点的置换表键。
     uint64_t makeSearchHash(SearchContext& ctx) const;
@@ -389,9 +505,15 @@ private:
 
     // ==================== 评估 ====================
 
-    // 统计某一方当前形成的“可提三连”总数。
-    // 编号规则下，历史中已登记过的同编号三连不再计入。
-    int countClaimableMills(SearchContext& ctx, NineChess::Players player) const;
+    // 按当前规则从 s_evalWeightsPerRule 取权重，并套用 SearchOptions 覆盖项。
+    void refreshWeights();
+
+    // 单遍扫描全部连线，同时统计某一方“可提三连”、“活二”与"成三点"数量
+    // （三种统计的扫描域相同，合并后省去多遍线扫描；evaluate 热路径专用）。
+    // 成三点 = 该方活二唯一空位；多个活二落在不同成三点构成真双三连威胁。
+    // 编号规则下，历史中已登记过的同编号三连不再计入可提三连。
+    void countMillsAndOpenMills(SearchContext& ctx, NineChess::Players player,
+        uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints) const;
 
     // 判断某一方在指定三连线上形成的三连，是否已登记在历史中。
     bool isMillKeyInHistory(SearchContext& ctx, NineChess::Players player, uint32_t lineId) const;
@@ -404,11 +526,8 @@ private:
     // 开局落子时下一颗新棋子的编号。
     int32_t nextPlacementNumber(SearchContext& ctx, NineChess::Players player) const;
 
-    // 统计某一方“二子成线且第三点为空”的活三潜力。
-    int countOpenMills(SearchContext& ctx, NineChess::Players player) const;
-
-    // 统计某一方当前局面的机动性。
-    int countMobility(SearchContext& ctx, NineChess::Players player) const;
+    // 统计某一方当前局面的机动性（occupied 由调用方传入，避免重复计算）。
+    int countMobility(SearchContext& ctx, NineChess::Players player, uint32_t occupied) const;
 
     // 统计某点位能阻断对手多少条潜在威胁线。
     int countBlockedThreats(SearchContext& ctx, NineChess::Players player, int32_t pos) const;
@@ -425,8 +544,8 @@ private:
     int countOpenMillsAfterOccupy(SearchContext& ctx, NineChess::Players player,
         int32_t fromPos, int32_t toPos) const;
 
-    // 统计某一方棋子所在点位的结构价值之和（点位数 = 该点穿过的三连线数）。
-    int countPointValue(SearchContext& ctx, NineChess::Players player) const;
+    // 统计某一方棋子所在点位的结构价值之和（board 为已套有效掩码的一方位棋盘）。
+    int countPointValue(SearchContext& ctx, uint32_t board) const;
 
     // ==================== 工具 ====================
 
@@ -451,6 +570,10 @@ private:
 private:
     // 搜索开始时的根局面，不在递归中直接改动（多线程只读共享）。
     NineChess m_root;
+
+    // 当前生效的评估权重（setChess/alphaBetaPruning 时按规则从表取值，
+    // 再套用 SearchOptions 的覆盖项）。
+    EvalWeights m_weights;
 
     // 预计算的全部对称变换表（多线程只读共享；AI 与开局库共用同一工具）。
     NineChessSymmetry m_symmetry;
@@ -494,10 +617,17 @@ private:
     // 根节点随机选择的随机源。
     std::mt19937_64 m_rng;
 
+    // 增量哈希校验开关与最近一次搜索的校验结果（selfcheck 用）。
+    bool m_verifyHashAccum = false;
+    bool m_hashVerifyFailed = false;
+
     // 对外发布的根走法分数（命令文本由 rootScoresText 生成）。
     std::vector<std::pair<Move, int>> m_rootScores;
 
     // 按规则分开的全局置换表：
     // 同规则不同 AI 实例共享缓存，不同规则之间彼此隔离。
     static std::array<TTStore, RULE_COUNT> s_ttStores;
+
+    // 按规则的评估权重表（定义见 ninechess_ai_ab.cpp，四行初始值相同）。
+    static const EvalWeights s_evalWeightsPerRule[RULE_COUNT];
 };

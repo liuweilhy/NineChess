@@ -234,6 +234,16 @@ inline bool isMillKeyPlayer2(MillKey key)
     return (key & MILL_KEY_PLAYER_MASK) != 0;
 }
 
+// ==================== hard 哈希组件函数（前置声明） ====================
+// getHashHard() 与 AI 的增量哈希共用这三个组件，保证
+// "全量重算"与"增量累加"两条路径逐位一致。定义在 ChessData 之后
+// （需要引用 ChessData::VALID_BOARD_MASK）。
+inline uint64_t hardHashLayerTerm(uint32_t layerBits, uint32_t player1Board,
+    uint32_t player2Board, uint32_t layerIndex);
+inline uint64_t hardHashHistoryTerm(uint16_t millKey);
+inline uint64_t hardHashCombine(uint64_t liteHash, uint64_t layerAccum,
+    uint64_t historyAccum, size_t historySize);
+
 // ==================== 棋局数据结构 ====================
 // ChessData 是 NineChess 核心逻辑和 AI 共用的局面描述。
 //
@@ -528,81 +538,86 @@ struct ChessData {
 
     // 九连棋专用 hard hash。
     //
-    // 先说明结论：
-    // 1. status + 主位棋盘 可以在 64 bit 内做得非常紧凑；
-    // 2. 但再加上 9 层序号位棋盘和历史三连表后，状态空间已经远超 64 bit；
-    // 3. 因此 hard hash 不再追求“严格数学上的完美哈希”，而追求：
-    //    - 对真实局面有极低冲突率
-    //    - 全程只用少量位运算 / 乘法 / 遍历 9 层数组与历史表
-    //    - 适合 AI 搜索中的高频调用
+    // 结构上拆成三部分（组件函数在本结构体定义之后，成员函数体可引用）：
+    // 1. getHashLite() 得到的 status + 主位棋盘基哈希；
+    // 2. 9 个编号层的"层项"——层项只依赖该层的占用与双方主位棋盘，
+    //    因此 AI 侧可以按层增量维护（层不变则项不变）；
+    // 3. millHistory 的"历史项"——无序集合语义，每条记录独立成项，
+    //    追加/回退都能用 XOR 增量维护；
+    // 4. hardHashCombine() 把三者合成最终哈希（含表长）。
     //
-    // 具体做法：
-    // 1. 先用 getHashLite() 取得 status + 主位棋盘的紧凑基哈希；
-    // 2. 对每个编号层，把“先手该号棋的位置 + 后手该号棋的位置”压成 10 bit 左右的 layerCode；
-    //    其中位置 0 表示“不在盘上”，1~24 表示棋盘实际点位编号 + 1；
-    // 3. 对每层 layerCode 做 64 位强混合，并按层号旋转后并入总哈希；
-    // 4. 对历史三连表 millHistory 做“集合语义”的无序混合：
-    //    同一个历史集合，不应因 push_back 顺序不同而得到不同哈希；
-    // 5. 最后再做一次 64 位 avalanche，得到最终 hard hash。
+    // AI 的增量路径与这里的全量重算共用同一组组件函数，
+    // 两者保证逐位一致（AI 侧有节流校验兜底）。
     inline uint64_t getHashHard() const
     {
-        const auto mix64 = [](uint64_t x) -> uint64_t {
-            x ^= x >> 30;
-            x *= 0xbf58476d1ce4e5b9ULL;
-            x ^= x >> 27;
-            x *= 0x94d049bb133111ebULL;
-            x ^= x >> 31;
-            return x;
-        };
-
-        const auto rotl64 = [](uint64_t x, uint32_t shift) -> uint64_t {
-            const uint32_t realShift = shift & 63u;
-            return realShift == 0u ? x : ((x << realShift) | (x >> (64u - realShift)));
-        };
-
-        uint64_t hash = mix64(getHashLite() ^ 0x6a09e667f3bcc909ULL);
-        const uint32_t player1 = player1Board & VALID_BOARD_MASK;
-        const uint32_t player2 = player2Board & VALID_BOARD_MASK;
-
+        uint64_t layerAccum = 0;
         for (uint32_t i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
-            const uint32_t layer = numberBoards[i] & VALID_BOARD_MASK;
-            const uint32_t player1Piece = player1 & layer;
-            const uint32_t player2Piece = player2 & layer;
-
-            // 每个编号层在每一方最多只有 1 颗棋，因此可以直接用“位置”而不是整张 24 位图来编码。
-            // 位置编码采用：
-            //   0    -> 该编号棋子当前不在盘上
-            //   1~24 -> 棋盘点位 index + 1
-            const uint32_t player1Pos = player1Piece == 0u ? 0u : (CTZ32(player1Piece) + 1u);
-            const uint32_t player2Pos = player2Piece == 0u ? 0u : (CTZ32(player2Piece) + 1u);
-
-            // layerCode 的信息量已经足够唯一描述“第 i 号棋的双边位置状态”：
-            // bit 0-4  : 先手该编号棋的位置（0~24）
-            // bit 5-9  : 后手该编号棋的位置（0~24）
-            // bit 10+  : 层号 i，自带“这是几号棋”的信息
-            const uint64_t layerCode =
-                static_cast<uint64_t>(player1Pos)
-                | (static_cast<uint64_t>(player2Pos) << 5)
-                | (static_cast<uint64_t>(i) << 10);
-
-            const uint64_t mixedLayer = mix64(layerCode + 0x9e3779b97f4a7c15ULL);
-            hash ^= rotl64(mixedLayer, 5u * i + 1u);
+            layerAccum ^= hardHashLayerTerm(numberBoards[i], player1Board, player2Board, i);
         }
 
-        // millHistory 在语义上是“历史集合”，不是“操作序列”。
-        // 因而这里故意采用无序混合：
-        // 1. 先把 size 混进去，避免异常重复元素时纯 xor 互相抵消；
-        // 2. 再把每个 MillKey 经过强混合后 xor 进去；
-        // 3. 每个 key 的旋转量取决于 key 自身，这样不同 key 更不容易在低位上扎堆。
-        uint64_t historyHash =
-            mix64(static_cast<uint64_t>(millHistory.size()) + 0xd1b54a32d192ed03ULL);
+        uint64_t historyAccum = 0;
         for (const MillKey key : millHistory) {
-            const uint64_t mixedMill =
-                mix64(static_cast<uint64_t>(key & MILL_KEY_USED_MASK) + 0x94d049bb133111ebULL);
-            historyHash ^= rotl64(mixedMill, static_cast<uint32_t>(key) & 63u);
+            historyAccum ^= hardHashHistoryTerm(key);
         }
 
-        return mix64(hash ^ rotl64(historyHash, 29u));
+        return hardHashCombine(getHashLite(), layerAccum, historyAccum, millHistory.size());
     }
 };
+
+// ==================== hard 哈希组件函数 ====================
+// 仅供 getHashHard() 与 AI 增量哈希使用；三者共同定义 hard 哈希的位格式。
+// 改动任何一个常量或运算都会使已有置换表/开局库键值失效，需谨慎。
+
+inline uint64_t hashMix64(uint64_t value)
+{
+    value ^= value >> 30;
+    value *= 0xbf58476d1ce4e5b9ULL;
+    value ^= value >> 27;
+    value *= 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return value;
+}
+
+inline uint64_t hashRotl64(uint64_t value, uint32_t shift)
+{
+    const uint32_t realShift = shift & 63u;
+    return realShift == 0u ? value : ((value << realShift) | (value >> (64u - realShift)));
+}
+
+// 第 layerIndex 个编号层的混合项：
+// 层编码 = 先手该号棋位置 | 后手位置<<5 | 层号<<10（位置 0 表示不在盘上）。
+inline uint64_t hardHashLayerTerm(uint32_t layerBits, uint32_t player1Board,
+    uint32_t player2Board, uint32_t layerIndex)
+{
+    const uint32_t layer = layerBits & ChessData::VALID_BOARD_MASK;
+    const uint32_t player1 = player1Board & ChessData::VALID_BOARD_MASK;
+    const uint32_t player2 = player2Board & ChessData::VALID_BOARD_MASK;
+    const uint32_t player1Piece = player1 & layer;
+    const uint32_t player2Piece = player2 & layer;
+    const uint32_t player1Pos = player1Piece == 0u ? 0u : (CTZ32(player1Piece) + 1u);
+    const uint32_t player2Pos = player2Piece == 0u ? 0u : (CTZ32(player2Piece) + 1u);
+
+    const uint64_t layerCode = static_cast<uint64_t>(player1Pos)
+        | (static_cast<uint64_t>(player2Pos) << 5)
+        | (static_cast<uint64_t>(layerIndex) << 10);
+    return hashRotl64(hashMix64(layerCode + 0x9e3779b97f4a7c15ULL), 5u * layerIndex + 1u);
+}
+
+// 单条历史三连记录的混合项（按键值旋转，避免不同 key 在低位扎堆）。
+inline uint64_t hardHashHistoryTerm(uint16_t millKey)
+{
+    return hashRotl64(
+        hashMix64(static_cast<uint64_t>(millKey & MILL_KEY_USED_MASK) + 0x94d049bb133111ebULL),
+        static_cast<uint32_t>(millKey) & 63u);
+}
+
+// 合成最终 hard 哈希：基哈希 + 层累加 + 历史累加（含表长种子）。
+inline uint64_t hardHashCombine(uint64_t liteHash, uint64_t layerAccum,
+    uint64_t historyAccum, size_t historySize)
+{
+    const uint64_t base = hashMix64(liteHash ^ 0x6a09e667f3bcc909ULL) ^ layerAccum;
+    const uint64_t historyHash =
+        hashMix64(static_cast<uint64_t>(historySize) + 0xd1b54a32d192ed03ULL) ^ historyAccum;
+    return hashMix64(base ^ hashRotl64(historyHash, 29u));
+}
 

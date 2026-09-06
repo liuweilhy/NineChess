@@ -1422,6 +1422,51 @@ std::string NineChess::formatDrawCommand() const
     return "==";
 }
 
+bool parseSetupCommand(const std::string& text, int& ruleNo, int& stepsLimit, int& timeLimit)
+{
+    ruleNo = -1;
+    stepsLimit = -1;
+    timeLimit = -1;
+
+    // 逐段扫描：r/s/t 标签后跟至少一位数字；各段可省略、顺序不限、不得重复，
+    // 整条命令中不允许出现其它字符。数值上限防溢出。
+    constexpr long kMaxValue = 1000000;
+    bool seen[3] = { false, false, false };
+    const size_t length = text.size();
+    size_t i = 0;
+    while (i < length) {
+        const char tag = text[i];
+        int which;
+        if (tag == 'r')
+            which = 0;
+        else if (tag == 's')
+            which = 1;
+        else if (tag == 't')
+            which = 2;
+        else
+            return false;
+        if (seen[which])
+            return false;
+        ++i;
+        if (i >= length || !std::isdigit(static_cast<unsigned char>(text[i])))
+            return false;
+        long value = 0;
+        while (i < length && std::isdigit(static_cast<unsigned char>(text[i]))) {
+            value = value * 10 + (text[i] - '0');
+            if (value > kMaxValue)
+                return false;
+            ++i;
+        }
+        seen[which] = true;
+        switch (which) {
+        case 0: ruleNo = static_cast<int>(value); break;
+        case 1: stepsLimit = static_cast<int>(value); break;
+        case 2: timeLimit = static_cast<int>(value); break;
+        }
+    }
+    return seen[0] || seen[1] || seen[2];
+}
+
 void NineChess::setLastCommand(const std::string& cmdline, bool commitHistory)
 {
     m_cmdline = cmdline;

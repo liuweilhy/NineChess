@@ -7,12 +7,12 @@ AiThread::AiThread(int id, QObject *parent) : QThread(parent),
     aiTime(10)
 {
     this->id = id;
-    // 连接定时器启动，减去118毫秒的返回时间
-    connect(this, &AiThread::calcStarted, this, [=]() {timer.start(aiTime * 1000 - 118); }, Qt::QueuedConnection);
-    // 连接定时器停止
-    connect(this, &AiThread::calcFinished, this, [=]() {timer.stop(); }, Qt::QueuedConnection);
-    // 连接定时器处理函数
-    connect(&timer, &QTimer::timeout, this, &AiThread::act, Qt::QueuedConnection);
+    // 每手棋的时间预算直接交给 AI 原生的时间控制（SearchOptions::timeLimitMs），
+    // 由搜索在预算内自行截断并保留最后一次完整迭代的走法，
+    // 不再用外部 QTimer 定时强行 quit（也就不需要补偿信号延迟的魔数）。
+    NineChess_AI_AB::SearchOptions options;
+    options.timeLimitMs = static_cast<int64_t>(aiTime) * 1000;
+    ai_ab.setOptions(options);
 }
 
 AiThread::~AiThread()
@@ -37,6 +37,10 @@ void AiThread::setAi(const NineChess &chess, int depth, int time)
     ai_ab.setChess(chess);
     aiDepth = depth;
     aiTime = time;
+    // 同步更新 AI 原生时间预算，其余搜索配置保持不变
+    NineChess_AI_AB::SearchOptions options = ai_ab.getOptions();
+    options.timeLimitMs = static_cast<int64_t>(time) * 1000;
+    ai_ab.setOptions(options);
     mutex.unlock();
 }
 

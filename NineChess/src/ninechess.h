@@ -565,3 +565,10 @@ protected:
     std::string transformCommandString(const std::string& command, TransformMode mode) const;
 };
 
+// 对局配置命令："r<规则号>s<限步数>t<限时分钟>"（如 r2s100t10）。
+// 各段可省略、顺序不限（如 r2 / s50t5），段内为十进制数字，0 表示不限制；
+// 命令中不得含有其它字符。棋谱文件用它记录规则与限时限步，
+// 模型不解析该命令，由控制层与控制台识别应用（限时限步属赛制，不进模型）。
+// 解析成功返回 true，未提供的段为 -1；语法非法返回 false。
+bool parseSetupCommand(const std::string& text, int& ruleNo, int& stepsLimit, int& timeLimit);
+

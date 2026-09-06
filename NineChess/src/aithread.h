@@ -3,7 +3,6 @@
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
-#include <QTimer>
 #include "ninechess.h"
 #include "ninechess_ai_ab.h"
 
@@ -58,9 +57,7 @@ private:
     NineChess_AI_AB ai_ab;
     // AI的层数
     int aiDepth;
-    // AI的限时
+    // AI的限时（秒），作为 AI 原生时间预算 SearchOptions::timeLimitMs 的来源
     int aiTime;
-    // 定时器
-    QTimer timer;
 };
 

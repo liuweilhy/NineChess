@@ -185,8 +185,8 @@ GameController::GameController(GameScene &scene, QObject *parent) : QObject(pare
     hasSound(true),
     timeID(0),
     ruleNo(-1),
-    timeLimit(0),
-    stepsLimit(120),
+    timeLimit(10),
+    stepsLimit(100),
     displayTime1MS(0),
     displayTime2MS(0),
     player1ElapsedMS(0),
@@ -243,10 +243,39 @@ GameController::~GameController()
     if (timeID != 0)
         killTimer(timeID);
     // 停掉线程
-    ai1.stop();
-    ai2.stop();
-    ai1.wait();
-    ai2.wait();
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
+}
+
+void GameController::stopAndWaitAi(AiThread &ai)
+{
+    if (ai.isRunning()) {
+        ai.stop();
+        ai.wait();
+    }
+}
+
+void GameController::resetHistorySnapshots()
+{
+    historyStates.clear();
+    historyStates.append(chess);
+}
+
+void GameController::appendHistorySnapshot()
+{
+    // 只有命令历史真正增长时才追加快照（choose 只改选中态、不落命令行，不能追加），
+    // 严格保持不变式 historyStates.size() == cmdCount + 1，
+    // 否则中盘“选子+落子”会让快照数组多涨一格，历史浏览会整体向前偏移一手。
+    if (historyStates.size() < static_cast<int>(chess.getCmdList()->size()) + 1) {
+        historyStates.append(chess);
+    }
+}
+
+int GameController::historyStateIndexForRow(int row) const
+{
+    // 第 0 行在没有棋谱时对应初始局面，有棋谱时对应第一招之后的局面
+    const int cmdCount = static_cast<int>(chess.getCmdList()->size());
+    return (cmdCount <= 0) ? 0 : row + 1;
 }
 
 // ==================== 菜单栏数据 ====================
@@ -302,10 +331,10 @@ bool GameController::executeCommandInternal(const QString &cmd, bool update, con
         }
     }
 
+    // 开局属于对局状态流转而非显示刷新：无论是否刷新界面都要先开局，
+    // 否则命令在未开局阶段无法执行（例如打开棋谱文件回放时）。
     if (chess.getPhase() == NineChess::GAME_NOTSTARTED) {
-        if (update) {
-            gameStart();
-        }
+        gameStart();
     }
 
     const NineChess::Players previousTurn = chess.getTurn();
@@ -318,6 +347,7 @@ bool GameController::executeCommandInternal(const QString &cmd, bool update, con
     }
 
     advanceGameStateRevision();
+    appendHistorySnapshot();
 
     if (update) {
         if (!applyStepLimit(previousTurn)
@@ -330,13 +360,15 @@ bool GameController::executeCommandInternal(const QString &cmd, bool update, con
     message = QString::fromStdString(chess.getTip());
     emit statusBarChanged(message);
 
-    if (update && (&chess == &(this->chess))) {
-        syncAiState();
-    }
-
     if (update) {
+        // 先播音效、刷新界面，再唤醒 AI：AI 唤醒后 Lazy SMP 会立刻吃满 CPU，
+        // 让音效启动先于搜索线程启动，避免相互争抢调度
         playActionSound(soundAction, true, previousStatus, previousSelectedPos, &chess);
         updateScence();
+    }
+
+    if (update && (&chess == &(this->chess))) {
+        syncAiState();
     }
     return true;
 }
@@ -536,6 +568,7 @@ void GameController::syncManualListFromChess()
         }
         manualListModel.setData(manualListModel.index(0), chess.getCmdLine());
         currentRow = 0;
+        emit browseRowChanged(currentRow);
         return;
     }
 
@@ -547,13 +580,21 @@ void GameController::syncManualListFromChess()
     manualListModel.setData(manualListModel.index(0), cmdList->front().c_str());
 
     // 后续只追加新增的棋谱行，避免 removeRows() + 全量插回去。
+    // 追加会让浏览链路自动同步到最新行，这属于走子的实时推进而非用户浏览，
+    // 置位 skipNextBrowseSound 让链路里的 phaseChange 不重放音效，
+    // 音效由走子路径（actionPiece / executeCommandInternal）唯一负责。
+    const bool appendedRows = cmdCount > manualListModel.rowCount();
+    if (appendedRows)
+        skipNextBrowseSound = true;
     for (int row = manualListModel.rowCount(); row < cmdCount; ++row)
     {
         manualListModel.insertRow(row);
         manualListModel.setData(manualListModel.index(row), cmdList->at(row).c_str());
     }
+    skipNextBrowseSound = false;
 
     currentRow = cmdCount - 1;
+    emit browseRowChanged(currentRow);
 }
 
 void GameController::syncAiState()
@@ -611,6 +652,7 @@ bool GameController::applyStepLimit(NineChess::Players previousTurn)
     }
 
     advanceGameStateRevision();
+    appendHistorySnapshot();
     finishTurnClock(previousTurn);
     return true;
 }
@@ -656,7 +698,10 @@ void GameController::handleTimeout()
         return;
     }
 
+    // 外部裁定结束没有命令记录，保存棋谱时据此补写结果命令（-0/-1）
+    endedByAdjudication = true;
     advanceGameStateRevision();
+    appendHistorySnapshot();
     finishTurnClock(loser);
     syncManualListFromChess();
     message = QString::fromStdString(chess.getTip());
@@ -672,7 +717,7 @@ void GameController::gameStart()
 {
     chess.start();
     advanceGameStateRevision();
-    chessTemp = chess;
+    resetHistorySnapshots();
     restartTurnClock();
     // 每隔100毫秒调用一次定时器处理函数
     if (timeID == 0) {
@@ -691,12 +736,13 @@ void GameController::gameReset()
     // 重置游戏
     chess.reset();
     advanceGameStateRevision();
-    chessTemp = chess;
+    resetHistorySnapshots();
     resetClockState();
+    endedByAdjudication = false;
 
     // 停掉线程
-    ai1.stop();
-    ai2.stop();
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
     isEngine1 = false;
     isEngine2 = false;
 
@@ -758,6 +804,8 @@ void GameController::gameReset()
     emitPieceCountsChanged();
 
     playActionSound(SoundAction::NewGame, true, 0, -1, &chess);
+    // 通知界面同步浏览行号与导航键状态
+    emit browseRowChanged(currentRow);
 }
 
 // ==================== 设置方法 ====================
@@ -791,18 +839,17 @@ void GameController::setInvert(bool arg)
 // 设置游戏规则
 void GameController::setRule(int ruleNo, int stepLimited, int timeLimited)
 {
-    // 更新规则，原限时和限步不变
+    // 更新规则，原限时和限步不变；-1 表示“不修改”该项
     if (ruleNo < 0 || ruleNo >= NineChess::RULE_COUNT)
         return;
     this->ruleNo = ruleNo;
 
-    if (stepLimited != -1 && timeLimited != -1) {
+    if (stepLimited != -1)
         stepsLimit = stepLimited;
+    if (timeLimited != -1)
         timeLimit = timeLimited;
-    }
     // 设置模型规则，重置游戏
     chess.setRule(static_cast<uint32_t>(ruleNo));
-    chessTemp = chess;
 
     // 重置游戏
     gameReset();
@@ -820,7 +867,7 @@ void GameController::setEngine1(bool arg)
             ai1.start();
     }
     else {
-        ai1.stop();
+        stopAndWaitAi(ai1);
     }
 }
 
@@ -836,21 +883,15 @@ void GameController::setEngine2(bool arg)
             ai2.start();
     }
     else {
-        ai2.stop();
+        stopAndWaitAi(ai2);
     }
 }
 
 // 设置AI深度和时限
 void GameController::setAiDepthTime(int depth1, int time1, int depth2, int time2)
 {
-    if (isEngine1) {
-        ai1.stop();
-        ai1.wait();
-    }
-    if (isEngine2) {
-        ai2.stop();
-        ai2.wait();
-    }
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
 
     ai1.setAi(chess, depth1, time1);
     ai2.setAi(chess, depth2, time2);
@@ -900,19 +941,15 @@ void GameController::playSound(const QString &soundPath)
 // 上下翻转
 void GameController::flip()
 {
-    if (isEngine1) {
-        ai1.stop();
-        ai1.wait();
-    }
-    if (isEngine2) {
-        ai2.stop();
-        ai2.wait();
-    }
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
 
-    chess.mirror();
-    chess.rotate(180);
+    chess.flipVertical();
     advanceGameStateRevision();
-    chessTemp = chess;
+    // 快照同步变换，保证历史浏览与悔棋的坐标一致
+    for (NineChess &state : historyStates) {
+        state.flipVertical();
+    }
     // 更新棋谱
     int row = 0;
     for (auto str : *(chess.getCmdList())) {
@@ -937,18 +974,15 @@ void GameController::flip()
 // 左右镜像
 void GameController::mirror()
 {
-    if (isEngine1) {
-        ai1.stop();
-        ai1.wait();
-    }
-    if (isEngine2) {
-        ai2.stop();
-        ai2.wait();
-    }
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
 
     chess.mirror();
     advanceGameStateRevision();
-    chessTemp = chess;
+    // 快照同步变换，保证历史浏览与悔棋的坐标一致
+    for (NineChess &state : historyStates) {
+        state.mirror();
+    }
     // 更新棋谱
     int row = 0;
     for (auto str : *(chess.getCmdList())) {
@@ -974,18 +1008,15 @@ void GameController::mirror()
 // 视图顺时针旋转90°
 void GameController::turnRight()
 {
-    if (isEngine1) {
-        ai1.stop();
-        ai1.wait();
-    }
-    if (isEngine2) {
-        ai2.stop();
-        ai2.wait();
-    }
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
 
     chess.rotate(-90);
     advanceGameStateRevision();
-    chessTemp = chess;
+    // 快照同步变换，保证历史浏览与悔棋的坐标一致
+    for (NineChess &state : historyStates) {
+        state.rotate(-90);
+    }
     // 更新棋谱
     int row = 0;
     for (auto str : *(chess.getCmdList())) {
@@ -1010,18 +1041,15 @@ void GameController::turnRight()
 // 视图逆时针旋转90°
 void GameController::turnLeft()
 {
-    if (isEngine1) {
-        ai1.stop();
-        ai1.wait();
-    }
-    if (isEngine2) {
-        ai2.stop();
-        ai2.wait();
-    }
+    stopAndWaitAi(ai1);
+    stopAndWaitAi(ai2);
 
     chess.rotate(90);
     advanceGameStateRevision();
-    chessTemp = chess;
+    // 快照同步变换，保证历史浏览与悔棋的坐标一致
+    for (NineChess &state : historyStates) {
+        state.rotate(90);
+    }
     // 更新棋谱
     int row = 0;
     for (auto str : *(chess.getCmdList())) {
@@ -1123,7 +1151,12 @@ bool GameController::actionPiece(QPointF pos)
 
         if (QMessageBox::Ok == msgBox.exec())
         {
-            chess = chessTemp;
+            // 回退到当前浏览的历史局面快照，并截断其后的快照与棋谱行
+            const int stateIndex = historyStateIndexForRow(currentRow);
+            if (stateIndex >= 0 && stateIndex < historyStates.size()) {
+                chess = historyStates.at(stateIndex);
+                historyStates.resize(stateIndex + 1);
+            }
             advanceGameStateRevision();
             manualListModel.removeRows(currentRow + 1, manualListModel.rowCount() - currentRow - 1);
             // 如果再决出胜负后悔棋，则重新启动计时
@@ -1142,6 +1175,8 @@ bool GameController::actionPiece(QPointF pos)
                 turnStartTimeMS = 0;
                 forcedAiTimeoutTurn = NineChess::NOBODY;
             }
+            // 棋谱行数变化，通知界面同步导航键状态
+            emit browseRowChanged(currentRow);
         }
         else
             return false;
@@ -1201,6 +1236,7 @@ bool GameController::actionPiece(QPointF pos)
     {
         const int oldRowCount = manualListModel.rowCount();
         advanceGameStateRevision();
+        appendHistorySnapshot();
 
         if (!applyStepLimit(previousTurn)
             && (chess.whoWin() != NineChess::NOBODY || chess.getTurn() != previousTurn)) {
@@ -1211,12 +1247,15 @@ bool GameController::actionPiece(QPointF pos)
         needDirectRefresh = manualListModel.rowCount() <= oldRowCount;
         message = QString::fromStdString(chess.getTip());
         emit statusBarChanged(message);
-        if (&chess == &(this->chess)) {
-            syncAiState();
-        }
     }
 
     playActionSound(soundAction, result, previousStatus, previousSelectedPos, &chess);
+
+    if (result) {
+        // 音效启动之后再唤醒 AI（见 executeCommandInternal 中的说明）
+        syncAiState();
+    }
+
     if (needDirectRefresh) {
         updateScence();
     }
@@ -1236,6 +1275,7 @@ bool GameController::giveUp()
     if (result)
     {
         advanceGameStateRevision();
+        appendHistorySnapshot();
         finishTurnClock(previousTurn);
         syncManualListFromChess();
         message = QString::fromStdString(chess.getTip());
@@ -1249,6 +1289,27 @@ bool GameController::giveUp()
 // 执行棋谱命令（供AI调用）
 bool GameController::command(const QString &cmd, bool update)
 {
+    // 对局配置命令 "r<规则>s<限步>t<限时>"（棋谱头部的会话级命令）：
+    // 模型不识别，由控制层应用。规则段会重开局；省略的段保持当前设置。
+    {
+        int rule = -1;
+        int steps = -1;
+        int timeLimit = -1;
+        if (parseSetupCommand(cmd.toStdString(), rule, steps, timeLimit)) {
+            if (rule >= 0) {
+                if (rule >= NineChess::RULE_COUNT)
+                    return false;
+                setRule(rule);
+            }
+            if (steps >= 0)
+                stepsLimit = steps;
+            if (timeLimit >= 0)
+                this->timeLimit = timeLimit;
+            refreshTimeDisplays();
+            return true;
+        }
+    }
+
     const AiThread *sourceAi = aiSourceFromSender();
     if (sourceAi != nullptr) {
         AiDispatchState &state = aiDispatchState(sourceAi);
@@ -1272,45 +1333,49 @@ bool GameController::command(const QString &cmd, bool update)
     }
 
     return executeCommandInternal(cmd, update, sourceAi);
-
-    // 防止接收滞后结束的线程发送的指令
-    // 记录执行前的动作类型
-    // 如果未开局则开局
-    // 当前状态
 }
 
-// 浏览历史局面，通过command函数刷新局面显示
+// 浏览历史局面，直接取对应快照刷新局面显示
 bool GameController::phaseChange(int row, bool forceUpdate)
 {
     // 如果row是当前浏览的棋谱行，则不需要刷新
     if (currentRow == row && !forceUpdate)
         return false;
 
-    // 当前状态
-    uint16_t previousStatus = 0;
-    int32_t previousSelectedPos = -1;
-    SoundAction soundAction = SoundAction::NewGame;
+    const int rows = manualListModel.rowCount();
+    if (row < 0 || row >= rows)
+        return false;
 
-    // 需要刷新
     currentRow = row;
-    int rows = manualListModel.rowCount();
-    QStringList mlist = manualListModel.stringList();
-    chessTemp.setRule(chess.getRuleIndex());
-    qDebug() << "rows:" << rows << " current:" << row;
-    // row 是当前要显示的棋谱行，所以回放时必须包含这一行。
-    for (int i = 0; i <= row; i++)
-    {
-        qDebug() << mlist.at(i);
-        previousStatus = chessTemp.getStatus();
-        previousSelectedPos = chessTemp.getCurrentPos();
-        soundAction = soundActionFromCommand(mlist.at(i), previousStatus);
-        chessTemp.command(mlist.at(i).toStdString().c_str());
-    }
 
-    // 刷新棋局场景
-    playActionSound(soundAction, true, previousStatus, previousSelectedPos, &chessTemp);
-    updateScence(&chessTemp);
+    // 从快照直接取出目标局面，避免每次浏览都从头回放全部命令
+    const int stateIndex = historyStateIndexForRow(row);
+    if (stateIndex < 0 || stateIndex >= historyStates.size())
+        return false;
+
+    const QStringList mlist = manualListModel.stringList();
+    const NineChess &previous = historyStates.at(stateIndex > 0 ? stateIndex - 1 : 0);
+    const NineChess &target = historyStates.at(stateIndex);
+    const SoundAction soundAction = soundActionFromCommand(mlist.at(row), previous.getStatus());
+
+    // 刷新棋局场景；音效只在真正的用户浏览时重放（走子链路的自动推进不重放，
+    // 见 syncManualListFromChess 中 skipNextBrowseSound 的说明）
+    const bool replaySound = !skipNextBrowseSound;
+    skipNextBrowseSound = false;
+    if (replaySound)
+        playActionSound(soundAction, true, previous.getStatus(), previous.getCurrentPos(), &target);
+    updateScence(&target);
+    emit browseRowChanged(currentRow);
     return true;
+}
+
+// 浏览历史局面：以控制器 currentRow 为唯一行号基准的统一入口
+bool GameController::browseTo(int row)
+{
+    const int rows = manualListModel.rowCount();
+    if (rows <= 0 || row < 0 || row >= rows)
+        return false;
+    return phaseChange(row);
 }
 
 // ==================== 音效与显示更新 ====================

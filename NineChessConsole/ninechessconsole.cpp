@@ -3,6 +3,7 @@
 
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <direct.h>
 #include <iostream>
@@ -17,6 +18,7 @@
 #include "ninechess.h"
 #include "ninechess_ai_ab.h"
 #include "ninechess_book.h"
+
 
 namespace {
 
@@ -154,10 +156,13 @@ void printHelp()
         << "  new                按当前规则重新开局\n"
         << "  rules              列出所有规则及说明\n"
         << "  rule N             切换到第 N 条规则、显示说明并重新开局\n"
-        << "  search [d] [t] [h] [r] [g] [th] [s] [pv] [a] [rep] [q]   AI 搜索当前局面并打印统计\n"
-        << "  match [n] [d] [h] [r] [th] [s] [mp]  AI 自对弈 n 局并打印汇总\n"
-        << "  vs [n] [d1] [h1] [pv1] [d2] [h2] [pv2] [s] [a] [rep]  不同配置引擎对抗（强度 A/B）\n"
+        << "  r<s<t<          对局配置命令（棋谱首行），如 r2s100t10；段可省略，0=不限\n"
+        << "  search [d] [t] [h] [r] [g] [th] [s] [pv] [a] [rep] [q] [dd] [pvs]   AI 搜索当前局面并打印统计\n"
+        << "  match [n] [d] [h] [r] [th] [s] [mp] [dd]  AI 自对弈 n 局并打印汇总\n"
+        << "  vs [n] [d1] [h1] [pv1] [d2] [h2] [pv2] [s] [a] [rep] [wp] [sp] [ft] [th]  不同配置引擎对抗（强度 A/B，奇偶局交替执先）\n"
         << "  booktrain [n] [d] [s]  自对弈训练开局库（无书对局，统计胜负分）\n"
+        << "  selfcheck [n] [d]      4 规则随机自对弈并逐节点校验增量哈希\n"
+        << "  tune [n] [d] [s] [r] [th]  按规则坐标下降自动调参（引擎对抗选值，结束后打印建议行）\n"
         << "  bookstat              查看开局库状态与样本最多的条目\n"
         << "  bookon / bookoff      启用 / 禁用开局库（match/vs 生效）\n"
         << "  booksave [path] / bookload [path]  保存 / 加载开局库（默认 books\\book_<规则>.dat）\n"
@@ -165,11 +170,12 @@ void printHelp()
         << "  quit               退出程序\n"
         << "\n"
         << "search/match/vs 参数说明（缺省用括号内默认值）:\n"
-        << "  search:  d=深度(8) t=时限ms(0不限) h=哈希(1) r=随机(0) g=分差(60) th=线程(1) s=种子(0) pv=点位价值(16) a=窗口(1) rep=重复惩罚(40) q=静默搜索(0)\n"
-        << "  match:   n=局数(20) d=深度(8) h=哈希(1) r=随机(1) th=线程(1) s=种子(0) mp=步数上限(300)\n"
-        << "  vs:      n=局数(20) 引擎1: d1=深度(6) h1=哈希(1) pv1=点位价值(16) | 引擎2: d2=深度(8) h2=哈希(1) pv2=点位价值(16) s=种子(0) a=窗口(1) rep=重复惩罚(40)\n"
+        << "  search:  d=深度(8) t=时限ms(0不限) h=哈希(1) r=随机(0) g=分差(60) th=线程(0自动) s=种子(0) pv=点位价值(16) a=窗口(1) rep=重复惩罚(40) q=静默搜索(0) dd=动态深度(1) pvs=PVS试探(0)\n"
+        << "  match:   n=局数(20) d=深度(8) h=哈希(1) r=随机(1) th=线程(0自动) s=种子(0) mp=步数上限(300) dd=动态深度(1)\n"
+        << "  vs:      n=局数(20) 引擎1: d1=深度(6) h1=哈希(1) pv1=点位价值(16) | 引擎2: d2=深度(8) h2=哈希(1) pv2=点位价值(16) wp=胜利压力(0) sp=闷杀压力(-1) ft=双三威胁(-1,均仅引擎2) s=种子(0) a=窗口(1) rep=重复惩罚(40) th=线程(0自动)\n"
         << "  h: 0=普通哈希 1=仅开局规范化(默认) 2=全部规范化; r: 0=纯最优, >0 启用根节点随机\n"
         << "  pv: 0=关闭点位价值; a: 0=关闭 Aspiration 窗口; rep: 0=关闭重复惩罚; q: 1=启用静默搜索\n"
+        << "  th: 0=自动(CPU核数推导); dd: 中局根局面追加2层深度; pvs: 非首走法零宽窗口试探\n"
         << "\n"
         << "说明:\n"
         << "  1. 坐标全部采用 0-based，下标范围为 c=0~2, p=0~7。\n"
@@ -208,6 +214,10 @@ void printHistory(const NineChess& chess)
 
 NineChessOpeningBook g_book;
 bool g_bookEnabled = false;
+
+// 对局配置（棋谱首行 r<s<t< 的限步/限时段）：控制台识别并回显，但不执行计时
+int g_setupSteps = 0;
+int g_setupTime = 0;
 
 std::string bookPathFor(uint32_t ruleIndex)
 {
@@ -393,7 +403,7 @@ void printSearchStats(const NineChess_AI_AB& ai)
         << "  重复命中: " << stats.repetitionHits.load() << "\n";
 }
 
-// search [depth] [timeMs] [hash] [random] [gap] [threads] [seed] [pv] [asp] [rep] [q]
+// search [depth] [timeMs] [hash] [random] [gap] [threads] [seed] [pv] [asp] [rep] [q] [dd] [pvs]
 void runSearchCommand(const std::string& argText, const NineChess& chess)
 {
     int64_t depth = 8;
@@ -401,17 +411,19 @@ void runSearchCommand(const std::string& argText, const NineChess& chess)
     int64_t hashMode = 1;
     int64_t randomLevel = 0;
     int64_t gap = 60;
-    int64_t threads = 1;
+    int64_t threads = 0;
     int64_t seed = 0;
     int64_t pv = 16;
     int64_t asp = 1;
     int64_t rep = 40;
     int64_t q = 0;
+    int64_t dd = 1;
+    int64_t pvs = 0;
 
     const std::vector<std::string> args = splitArgs(argText);
     int64_t* slots[] = { &depth, &timeMs, &hashMode, &randomLevel, &gap,
-        &threads, &seed, &pv, &asp, &rep, &q };
-    for (size_t i = 0; i < args.size() && i < 11; ++i) {
+        &threads, &seed, &pv, &asp, &rep, &q, &dd, &pvs };
+    for (size_t i = 0; i < args.size() && i < 13; ++i) {
         tryParseInt64(args[i], *slots[i]);
     }
 
@@ -419,20 +431,26 @@ void runSearchCommand(const std::string& argText, const NineChess& chess)
     options.timeLimitMs = timeMs;
     options.randomness = static_cast<uint32_t>(randomLevel);
     options.randomGap = static_cast<int32_t>(gap);
-    options.threads = static_cast<uint32_t>(threads);
+    // threads <= 0 表示自动：按 CPU 逻辑核心数取默认值。
+    options.threads = threads > 0
+        ? static_cast<uint32_t>(threads)
+        : NineChess_AI_AB::defaultThreadCount();
     options.hashMode = hashModeFromInt(hashMode);
     options.seed = static_cast<uint64_t>(seed);
     options.pointValueWeight = static_cast<int32_t>(pv);
     options.aspirationWindows = asp != 0;
     options.repetitionPenalty = static_cast<int32_t>(rep);
     options.quiescenceSearch = q != 0;
+    options.dynamicDepth = dd != 0;
+    options.pvSearch = pvs != 0;
 
     std::cout << "AI 搜索: 规则=" << chess.getRule()->name
         << " 深度=" << depth << " 时限=" << timeMs << "ms"
         << " 哈希=" << hashMode << " 随机=" << randomLevel
-        << " 线程=" << threads << " 种子=" << seed << " 点位价值=" << pv
-        << " 窗口=" << asp << " 重复惩罚=" << rep << " 静默=" << q << "\n";
-    if (threads > 1) {
+        << " 线程=" << options.threads << " 种子=" << seed << " 点位价值=" << pv
+        << " 窗口=" << asp << " 重复惩罚=" << rep << " 静默=" << q
+        << " 动态深度=" << (dd != 0) << " PVS=" << (pvs != 0) << "\n";
+    if (options.threads > 1) {
         std::cout << "（Lazy SMP 多线程）\n";
     }
 
@@ -446,20 +464,21 @@ void runSearchCommand(const std::string& argText, const NineChess& chess)
     std::cout << "根走法分数:\n" << ai.rootScoresText();
 }
 
-// match [games] [depth] [hash] [random] [threads] [seed] [maxPlies]
+// match [games] [depth] [hash] [random] [threads] [seed] [maxPlies] [dd]
 void runMatchCommand(const std::string& argText, NineChess& chess)
 {
     int64_t games = 20;
     int64_t depth = 8;
     int64_t hashMode = 1;
     int64_t randomLevel = 1;
-    int64_t threads = 1;
+    int64_t threads = 0;
     int64_t seed = 0;
     int64_t maxPlies = 300;
+    int64_t dd = 1;
 
     const std::vector<std::string> args = splitArgs(argText);
-    int64_t* slots[] = { &games, &depth, &hashMode, &randomLevel, &threads, &seed, &maxPlies };
-    for (size_t i = 0; i < args.size() && i < 7; ++i) {
+    int64_t* slots[] = { &games, &depth, &hashMode, &randomLevel, &threads, &seed, &maxPlies, &dd };
+    for (size_t i = 0; i < args.size() && i < 8; ++i) {
         tryParseInt64(args[i], *slots[i]);
     }
     if (games <= 0) {
@@ -475,8 +494,9 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
     std::cout << "match 开始: 规则=" << chess.getRule()->name
         << " 局数=" << games << " 深度=" << depth
         << " 哈希=" << hashMode << " 随机=" << randomLevel
-        << " 线程=" << threads << " 种子=" << seed << "\n";
-    if (threads > 1) {
+        << " 线程=" << (threads > 0 ? threads : static_cast<int64_t>(NineChess_AI_AB::defaultThreadCount()))
+        << " 种子=" << seed << " 动态深度=" << (dd != 0) << "\n";
+    if (threads > 1 || (threads <= 0 && NineChess_AI_AB::defaultThreadCount() > 1)) {
         std::cout << "（Lazy SMP 多线程）\n";
     }
 
@@ -503,9 +523,13 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
         options.timeLimitMs = 0;
         options.randomness = static_cast<uint32_t>(randomLevel);
         options.randomGap = 60;
-        options.threads = static_cast<uint32_t>(threads);
+        // threads <= 0 表示自动：按 CPU 逻辑核心数取默认值。
+        options.threads = threads > 0
+            ? static_cast<uint32_t>(threads)
+            : NineChess_AI_AB::defaultThreadCount();
         options.hashMode = hashModeFromInt(hashMode);
         options.seed = static_cast<uint64_t>(seed + g * 2 + 1);
+        options.dynamicDepth = dd != 0;
         ai1.setOptions(options);
         options.seed = static_cast<uint64_t>(seed + g * 2 + 2);
         ai2.setOptions(options);
@@ -577,9 +601,12 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
             ? totalNodes * 1000 / static_cast<uint64_t>(totalTimeMs) : 0u) << "\n";
 }
 
-// vs [games] [d1] [h1] [pv1] [d2] [h2] [pv2] [seed] [asp] [rep]
-// 双方采用不同配置的对抗测试：先手引擎1 vs 后手引擎2，用于强度 A/B。
-// asp/rep 对双方同时生效（对比"开 vs 关"的整体引擎行为）。
+// vs [games] [d1] [h1] [pv1] [d2] [h2] [pv2] [seed] [asp] [rep] [wp] [sp] [ft] [th]
+// 双方采用不同配置的对抗测试，用于强度 A/B。
+// asp/rep 对双方同时生效（对比"开 vs 关"的整体引擎行为）；
+// wp/sp/ft 只作用于引擎2（引擎1 恒为表默认），用于评估项 A/B。
+// 奇偶局交替执先：偶数局引擎1 执先，奇数局引擎2 执先，
+// 消除当前评估下明显的执先优势对 A/B 结果的干扰。
 void runVsCommand(const std::string& argText, NineChess& chess)
 {
     int64_t games = 20;
@@ -592,11 +619,15 @@ void runVsCommand(const std::string& argText, NineChess& chess)
     int64_t seed = 0;
     int64_t asp = 1;
     int64_t rep = 40;
+    int64_t wp = 0;
+    int64_t sp = -1;
+    int64_t ft = -1;
+    int64_t th = 0;
 
     const std::vector<std::string> args = splitArgs(argText);
     int64_t* slots[] = { &games, &depth1, &hash1, &pv1, &depth2, &hash2, &pv2,
-        &seed, &asp, &rep };
-    for (size_t i = 0; i < args.size() && i < 10; ++i) {
+        &seed, &asp, &rep, &wp, &sp, &ft, &th };
+    for (size_t i = 0; i < args.size() && i < 14; ++i) {
         tryParseInt64(args[i], *slots[i]);
     }
     if (games <= 0) {
@@ -611,9 +642,12 @@ void runVsCommand(const std::string& argText, NineChess& chess)
 
     std::cout << "vs 开始: 规则=" << chess.getRule()->name
         << " 局数=" << games
-        << " 引擎1(先手): 深度=" << depth1 << " 哈希=" << hash1 << " 点位价值=" << pv1
-        << " | 引擎2(后手): 深度=" << depth2 << " 哈希=" << hash2 << " 点位价值=" << pv2
-        << " 种子=" << seed << " 窗口=" << asp << " 重复惩罚=" << rep << "\n";
+        << " 引擎1: 深度=" << depth1 << " 哈希=" << hash1 << " 点位价值=" << pv1
+        << " | 引擎2: 深度=" << depth2 << " 哈希=" << hash2 << " 点位价值=" << pv2
+        << " 胜利压力=" << wp << " 闷杀压力=" << sp << " 双三威胁=" << ft
+        << " 线程=" << (th > 0 ? th : static_cast<int64_t>(NineChess_AI_AB::defaultThreadCount()))
+        << " 种子=" << seed << " 窗口=" << asp << " 重复惩罚=" << rep
+        << "（奇偶局交替执先）\n";
 
     const uint32_t ruleIndex = chess.getRuleIndex();
     NineChess_AI_AB ai1;
@@ -633,19 +667,32 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         game.setRule(ruleIndex);
         game.start();
 
+        // 奇偶局交替执先，保证两个引擎拿到的先手局数均衡。
+        const bool swapColors = (g % 2 == 1);
+        NineChess_AI_AB& aiFirst = swapColors ? ai2 : ai1;
+        NineChess_AI_AB& aiSecond = swapColors ? ai1 : ai2;
+
         NineChess_AI_AB::SearchOptions options;
         options.timeLimitMs = 0;
         options.randomness = 1;   // 双方都启用随机，保证对局有变化
         options.randomGap = 60;
-        options.threads = 1;
+        // 双方同线程数保持公平；同深度对抗下共享置换表的反馈是对称的。
+        // 注意：深度不对称的 A/B（如 5v7）建议 th=1，避免跨引擎 TT 反馈不对称。
+        options.threads = th > 0
+            ? static_cast<uint32_t>(th)
+            : NineChess_AI_AB::defaultThreadCount();
         options.aspirationWindows = asp != 0;
         options.repetitionPenalty = static_cast<int32_t>(rep);
         options.hashMode = hashModeFromInt(hash1);
         options.pointValueWeight = static_cast<int32_t>(pv1);
+        options.winPressureWeight = 0;
         options.seed = static_cast<uint64_t>(seed + g * 2 + 1);
         ai1.setOptions(options);
         options.hashMode = hashModeFromInt(hash2);
         options.pointValueWeight = static_cast<int32_t>(pv2);
+        options.winPressureWeight = static_cast<int32_t>(wp);
+        options.stalematePressureWeight = static_cast<int32_t>(sp);
+        options.forkThreatWeight = static_cast<int32_t>(ft);
         options.seed = static_cast<uint64_t>(seed + g * 2 + 2);
         ai2.setOptions(options);
 
@@ -665,8 +712,11 @@ void runVsCommand(const std::string& argText, NineChess& chess)
                 }
                 ++bookRejects;
             }
-            NineChess_AI_AB& ai = game.getTurn() == NineChess::PLAYER1 ? ai1 : ai2;
-            const int64_t depth = game.getTurn() == NineChess::PLAYER1 ? depth1 : depth2;
+            const bool firstTurn = game.getTurn() == NineChess::PLAYER1;
+            NineChess_AI_AB& ai = firstTurn ? aiFirst : aiSecond;
+            const int64_t depth = firstTurn
+                ? (swapColors ? depth2 : depth1)
+                : (swapColors ? depth1 : depth2);
             ai.setChess(game);
             ai.alphaBetaPruning(static_cast<int>(depth));
             NineChess_AI_AB::SearchStats stats;
@@ -686,13 +736,18 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         }
 
         const NineChess::Players winner = game.whoWin();
-        const char* resultText = winner == NineChess::PLAYER1
-            ? "引擎1(先手)胜"
-            : (winner == NineChess::PLAYER2 ? "引擎2(后手)胜" : "平局");
-        if (winner == NineChess::PLAYER1) {
+        const bool engine1Won = swapColors ? (winner == NineChess::PLAYER2)
+                                           : (winner == NineChess::PLAYER1);
+        const bool engine2Won = swapColors ? (winner == NineChess::PLAYER1)
+                                           : (winner == NineChess::PLAYER2);
+        const char* colorText = swapColors ? "后手" : "先手";
+        const char* resultText = engine1Won
+            ? "引擎1胜"
+            : (engine2Won ? "引擎2胜" : "平局");
+        if (engine1Won) {
             ++wins1;
         }
-        else if (winner == NineChess::PLAYER2) {
+        else if (engine2Won) {
             ++wins2;
         }
         else {
@@ -700,11 +755,12 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         }
 
         std::cout << "第 " << (g + 1) << " 局: " << resultText
+            << "（胜者执" << (winner == NineChess::NOBODY ? "-" : colorText) << "）"
             << "  步数: " << plies << "\n";
     }
 
     std::cout << "==== vs 汇总 ====\n";
-    std::cout << "引擎1(先手)胜: " << wins1 << "  引擎2(后手)胜: " << wins2
+    std::cout << "引擎1胜: " << wins1 << "  引擎2胜: " << wins2
         << "  平局: " << draws << "\n";
     std::cout << "书内走法: " << bookUses
         << "  书内被拒: " << bookRejects << "\n";
@@ -812,6 +868,289 @@ void runBookTrainCommand(const std::string& argText, NineChess& chess)
         << "  记录数: " << g_book.totalRecords()
         << "  保存: " << (saved ? path : "失败") << "\n";
     g_bookEnabled = true;
+}
+
+// selfcheck [games] [depth]：4 条规则随机自对弈，逐节点校验增量哈希累加器。
+// 任何一步校验失败或 AI 指令被模型拒绝都会立即报告并停止。
+void runSelfCheckCommand(const std::string& argText)
+{
+    int64_t games = 6;
+    int64_t depth = 4;
+    const std::vector<std::string> args = splitArgs(argText);
+    int64_t* slots[] = { &games, &depth };
+    for (size_t i = 0; i < args.size() && i < 2; ++i) {
+        tryParseInt64(args[i], *slots[i]);
+    }
+    if (games <= 0) {
+        games = 6;
+    }
+    if (depth <= 0) {
+        depth = 4;
+    }
+
+    std::cout << "selfcheck 开始: 每规则 " << games << " 局, 深度 " << depth
+        << ", 逐节点校验增量哈希\n";
+
+    int64_t totalPlies = 0;
+    bool failed = false;
+    for (uint32_t rule = 0; rule < RULE_COUNT && !failed; ++rule) {
+        NineChess_AI_AB ai1;
+        NineChess_AI_AB ai2;
+        NineChess_AI_AB::SearchOptions options;
+        options.randomness = 1;
+        options.threads = 1;
+
+        int64_t rulePlies = 0;
+        for (int64_t g = 0; g < games && !failed; ++g) {
+            NineChess game;
+            game.setRule(rule);
+            game.start();
+            options.seed = static_cast<uint64_t>(rule * 100000 + g * 2 + 1);
+            ai1.setOptions(options);
+            options.seed = static_cast<uint64_t>(rule * 100000 + g * 2 + 2);
+            ai2.setOptions(options);
+
+            int64_t plies = 0;
+            while (game.whoWin() == NineChess::NOBODY && plies < 200) {
+                NineChess_AI_AB& ai = game.getTurn() == NineChess::PLAYER1 ? ai1 : ai2;
+                ai.setHashVerification(true);
+                ai.setChess(game);
+                ai.alphaBetaPruning(static_cast<int>(depth));
+                if (ai.lastHashVerifyFailed()) {
+                    std::cout << "  [FAIL] 规则 " << rule << " 第 " << (g + 1)
+                        << " 局第 " << plies << " 步: 增量哈希校验失败!\n";
+                    failed = true;
+                    break;
+                }
+                const char* cmd = ai.bestMove();
+                if (std::strcmp(cmd, "error!") == 0) {
+                    break;
+                }
+                if (!game.command(cmd)) {
+                    std::cout << "  [FAIL] 规则 " << rule << " AI 指令被模型拒绝: "
+                        << cmd << "\n";
+                    failed = true;
+                    break;
+                }
+                ++plies;
+            }
+            rulePlies += plies;
+        }
+        totalPlies += rulePlies;
+        std::cout << "  规则 " << rule << " (" << NineChess::rules[rule].name
+            << "): " << (failed ? "失败" : "完成")
+            << "  步数: " << rulePlies << "\n";
+    }
+
+    if (!failed) {
+        std::cout << "==== selfcheck PASS ====  总步数: " << totalPlies << "\n";
+    }
+}
+
+// ==================== tune：按规则坐标下降自动调参 ====================
+
+struct TuneColumn {
+    const char* name;
+    int32_t NineChess_AI_AB::EvalWeights::* field;
+    std::vector<double> factors;          // 相对当前值的倍率候选
+    std::vector<int32_t> zeroCandidates;  // 当前值为 0 时的绝对值候选
+};
+
+const std::vector<TuneColumn>& tuneColumns()
+{
+    static const std::vector<TuneColumn> columns = {
+        { "openingMaterial", &NineChess_AI_AB::EvalWeights::openingMaterial, { 0.6, 1.6 }, {} },
+        { "openingInHand",   &NineChess_AI_AB::EvalWeights::openingInHand,   { 0.0, 1.6 }, {} },
+        { "openingMill",     &NineChess_AI_AB::EvalWeights::openingMill,     { 0.6, 1.6 }, {} },
+        { "openingOpenMill", &NineChess_AI_AB::EvalWeights::openingOpenMill, { 0.0, 1.6 }, {} },
+        { "midMaterial",     &NineChess_AI_AB::EvalWeights::midMaterial,     { 0.6, 1.6 }, {} },
+        { "midMill",         &NineChess_AI_AB::EvalWeights::midMill,         { 0.6, 1.6 }, {} },
+        { "midOpenMill",     &NineChess_AI_AB::EvalWeights::midOpenMill,     { 0.0, 1.6 }, {} },
+        { "midMobility",     &NineChess_AI_AB::EvalWeights::midMobility,     { 0.0, 2.0, 4.0 }, {} },
+        { "captureOpening",  &NineChess_AI_AB::EvalWeights::captureOpening,  { 0.0, 1.6 }, {} },
+        { "captureMid",      &NineChess_AI_AB::EvalWeights::captureMid,      { 0.0, 1.6 }, {} },
+        { "forkThreat",      &NineChess_AI_AB::EvalWeights::forkThreat,      {}, { 40, 80, 160 } },
+        { "stalematePressure", &NineChess_AI_AB::EvalWeights::stalematePressure, {}, { 40, 80 } },
+    };
+    return columns;
+}
+
+// 打印一行权重为可直接回贴 s_evalWeightsPerRule 的 C++ 片段。
+void printWeightsRow(const NineChess_AI_AB::EvalWeights& w)
+{
+    std::cout << "{ " << w.openingMaterial << ", " << w.openingInHand
+        << ", " << w.openingMill << ", " << w.openingOpenMill
+        << ",      " << w.midMaterial << ", " << w.midMill
+        << ", " << w.midOpenMill << ", " << w.midMobility
+        << ",       " << w.captureOpening << ", " << w.captureMid
+        << ",    " << w.forkThreat << ",   " << w.stalematePressure << " }";
+}
+
+// baseline 行 vs candidate 行的对抗（交替执先）；返回引擎2（candidate）的平均得分率。
+double playTuneMatch(uint32_t ruleIndex, const NineChess_AI_AB::EvalWeights& baselineRow,
+    const NineChess_AI_AB::EvalWeights& candidateRow, int games, int depth, int64_t seedBase,
+    uint32_t threads)
+{
+    int64_t score2x2 = 0; // 引擎2 得分×2：胜=2 和=1 负=0，避免浮点累计误差
+    for (int64_t g = 0; g < games; ++g) {
+        NineChess game;
+        game.setRule(ruleIndex);
+        game.start();
+
+        const bool swapColors = (g % 2 == 1);
+        NineChess_AI_AB ai1;
+        NineChess_AI_AB ai2;
+        NineChess_AI_AB::SearchOptions options;
+        options.timeLimitMs = 0;
+        options.randomness = 1;
+        options.randomGap = 60;
+        options.threads = threads;
+        options.dynamicDepth = false;
+        options.useCustomWeights = true;
+        options.weights = swapColors ? candidateRow : baselineRow;
+        options.seed = static_cast<uint64_t>(seedBase + g * 2 + 1);
+        ai1.setOptions(options);
+        options.weights = swapColors ? baselineRow : candidateRow;
+        options.seed = static_cast<uint64_t>(seedBase + g * 2 + 2);
+        ai2.setOptions(options);
+
+        ai1.setChess(game);
+        ai2.setChess(game);
+        ai1.clearTranspositionTable();
+
+        int64_t plies = 0;
+        while (game.whoWin() == NineChess::NOBODY && plies < 300) {
+            const bool firstTurn = game.getTurn() == NineChess::PLAYER1;
+            NineChess_AI_AB& ai = firstTurn ? ai1 : ai2;
+            ai.setChess(game);
+            ai.alphaBetaPruning(depth);
+            const char* cmd = ai.bestMove();
+            if (std::strcmp(cmd, "error!") == 0) {
+                break;
+            }
+            if (!game.command(cmd)) {
+                break;
+            }
+            ++plies;
+        }
+
+        const NineChess::Players winner = game.whoWin();
+        // 引擎2 = candidate；换色时引擎2 执先手（玩家1 位置）。
+        const bool candidateWon = swapColors ? (winner == NineChess::PLAYER1)
+                                             : (winner == NineChess::PLAYER2);
+        const bool baselineWon = swapColors ? (winner == NineChess::PLAYER2)
+                                            : (winner == NineChess::PLAYER1);
+        if (candidateWon) {
+            score2x2 += 2;
+        }
+        else if (!baselineWon) {
+            score2x2 += 1;
+        }
+    }
+    return games > 0 ? static_cast<double>(score2x2) / (2.0 * games) : 0.5;
+}
+
+// tune [games] [depth] [seed] [rounds] [threads]
+// 坐标下降调参：逐列尝试候选值（引擎2=候选 vs 引擎1=当前行，交替执先），
+// 取胜率 >50% 的最优者贪心更新当前行；rounds>1 时重复整轮扫描（列间交互补偿）。
+// threads 默认 0 = 按 CPU 核数自动（多线程只加速搜索，同深度下双方公平）。
+// 结束后与原始行做终局验证对局，并打印可直接回贴 s_evalWeightsPerRule 的行。
+// 只打印建议，不改动源码中的表；采纳由人工复核后进行。
+void runTuneCommand(const std::string& argText, const NineChess& chess)
+{
+    int64_t games = 8;
+    int64_t depth = 6;
+    int64_t seed = 1;
+    int64_t rounds = 1;
+    int64_t threads = 0;
+    const std::vector<std::string> args = splitArgs(argText);
+    int64_t* slots[] = { &games, &depth, &seed, &rounds, &threads };
+    for (size_t i = 0; i < args.size() && i < 5; ++i) {
+        tryParseInt64(args[i], *slots[i]);
+    }
+    if (games <= 0) {
+        games = 8;
+    }
+    if (depth <= 0) {
+        depth = 6;
+    }
+    if (rounds <= 0) {
+        rounds = 1;
+    }
+    const uint32_t threadCount = threads > 0
+        ? static_cast<uint32_t>(threads)
+        : NineChess_AI_AB::defaultThreadCount();
+
+    const uint32_t ruleIndex = chess.getRuleIndex();
+    NineChess_AI_AB::EvalWeights baselineRow =
+        NineChess_AI_AB::tableWeights(ruleIndex);
+    const NineChess_AI_AB::EvalWeights originalRow = baselineRow;
+
+    std::cout << "tune 开始: 规则=" << chess.getRule()->name
+        << " 每候选 " << games << " 局 深度 " << depth
+        << " 轮数 " << rounds << " 种子 " << seed
+        << " 线程 " << threadCount << "\n"
+        << "原始行: ";
+    printWeightsRow(baselineRow);
+    std::cout << "\n" << std::flush;
+
+    for (int64_t round = 0; round < rounds; ++round) {
+        for (const TuneColumn& column : tuneColumns()) {
+            const int32_t currentValue = baselineRow.*column.field;
+            std::vector<int32_t> candidates;
+            if (currentValue == 0) {
+                candidates = column.zeroCandidates;
+            }
+            else {
+                for (const double factor : column.factors) {
+                    const int32_t value = static_cast<int32_t>(
+                        std::lround(currentValue * factor));
+                    if (value != currentValue) {
+                        candidates.push_back(value);
+                    }
+                }
+            }
+            if (candidates.empty()) {
+                continue;
+            }
+
+            int32_t bestValue = currentValue;
+            double bestRate = 0.5;
+            for (const int32_t candidate : candidates) {
+                NineChess_AI_AB::EvalWeights row = baselineRow;
+                row.*column.field = candidate;
+                const double rate = playTuneMatch(ruleIndex, baselineRow, row,
+                    static_cast<int>(games), static_cast<int>(depth),
+                    seed * 1000000 + round * 10000
+                        + static_cast<int64_t>(&column - tuneColumns().data()) * 100,
+                    threadCount);
+                std::cout << "  列=" << column.name << " " << currentValue
+                    << " -> " << candidate
+                    << "  得分率 " << static_cast<int>(rate * 100) << "%\n" << std::flush;
+                if (rate > bestRate) {
+                    bestRate = rate;
+                    bestValue = candidate;
+                }
+            }
+            if (bestValue != currentValue) {
+                baselineRow.*column.field = bestValue;
+                std::cout << "  列=" << column.name << " 采用 " << bestValue << "\n" << std::flush;
+            }
+        }
+    }
+
+    std::cout << "调参后行: ";
+    printWeightsRow(baselineRow);
+    std::cout << "\n";
+
+    // 终局验证：原始行 vs 调参后行（局数翻倍）。
+    const double finalRate = playTuneMatch(ruleIndex, originalRow, baselineRow,
+        static_cast<int>(games * 2), static_cast<int>(depth),
+        seed * 1000000 + 999999, threadCount);
+    std::cout << "终局验证: 调参行 vs 原始行 得分率 "
+        << static_cast<int>(finalRate * 100) << "%（"
+        << games * 2 << " 局，>50% 表示调参行更强）\n";
+    std::cout << "==== tune 完成 ====\n" << std::flush;
 }
 
 // bookstat
@@ -979,6 +1318,14 @@ int main(int argc, char* argv[])
                 runBookStatCommand(chess);
                 continue;
             }
+            if (head == "selfcheck") {
+                runSelfCheckCommand(rest);
+                continue;
+            }
+            if (head == "tune") {
+                runTuneCommand(rest, chess);
+                continue;
+            }
             if (head == "bookon") {
                 g_bookEnabled = true;
                 std::cout << "开局库已启用。\n";
@@ -1033,6 +1380,40 @@ int main(int argc, char* argv[])
             chess.start();
             printBoard(chess);
             continue;
+        }
+
+        // 对局配置命令 r<s<t<（棋谱首行）：规则段复用 rule 切换流程重开局，
+        // 限步/限时段仅记录并回显——控制台不执行计时，模型层也不感知
+        {
+            int setupRule = -1;
+            int setupSteps = -1;
+            int setupTime = -1;
+            if (parseSetupCommand(cmd, setupRule, setupSteps, setupTime)) {
+                bool ruleChanged = false;
+                if (setupRule >= 0) {
+                    if (setupRule >= RULE_COUNT) {
+                        std::cout << "规则编号无效: " << setupRule
+                            << "（有效范围 0.." << RULE_COUNT - 1 << "）\n";
+                        continue;
+                    }
+                    const NineChess before = chess;
+                    tryHandleRuleCommand("rule " + std::to_string(setupRule), chess, ruleChanged);
+                    if (ruleChanged)
+                        undoStack.push_back(before);
+                }
+                if (setupSteps >= 0)
+                    g_setupSteps = setupSteps;
+                if (setupTime >= 0)
+                    g_setupTime = setupTime;
+                std::cout << "对局配置: 限步="
+                    << (g_setupSteps > 0 ? std::to_string(g_setupSteps) + " 步" : "不限")
+                    << "，限时="
+                    << (g_setupTime > 0 ? std::to_string(g_setupTime) + " 分钟" : "不限")
+                    << "（控制台不计时，仅记录）\n";
+                if (!ruleChanged)
+                    printBoard(chess);
+                continue;
+            }
         }
 
         const NineChess snapshot = chess;

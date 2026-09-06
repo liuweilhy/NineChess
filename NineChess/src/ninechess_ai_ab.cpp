@@ -12,8 +12,19 @@
 
 std::array<NineChess_AI_AB::TTStore, RULE_COUNT> NineChess_AI_AB::s_ttStores = {};
 
+// 按规则的评估权重表。四行初始值相同（等于历史魔数），后续调参按行独立修改；
+// 各列含义见 EvalWeights 字段注释。
+//        开局: 子 手牌 三连 活二 | 中局: 子 三连 活二 机动 | 提子: 开局 中局 | 双三 闷杀
+const NineChess_AI_AB::EvalWeights NineChess_AI_AB::s_evalWeightsPerRule[RULE_COUNT] = {
+    /* 0 成三棋 */ { 120,  48,  96,  24,      180, 112,  32,  10,       160,  220,    0,   0 },
+    /* 1 打三棋 */ { 120,  48,  96,  24,      180, 112,  32,  10,       160,  220,    0,   0 },
+    /* 2 九连棋 */ { 120,  48,  96,  24,      180, 112,  32,  10,       160,  220,    0,   0 },
+    /* 3 莫里斯 */ { 120,  48,  96,  24,      180, 112,  32,  10,       160,  220,    0,   0 },
+};
+
 namespace {
 
+// ===== 临时测量用（测完回退）：评估耗时占比 =====
 inline uint64_t mix64(uint64_t value)
 {
     value ^= value >> 30;
@@ -39,9 +50,45 @@ NineChess_AI_AB::NineChess_AI_AB()
     m_pointValue.fill(0);
 }
 
+uint32_t NineChess_AI_AB::defaultThreadCount()
+{
+    // 依据本机逻辑核心数给一个“开箱即用”的默认线程数：
+    // 实测 Lazy SMP 扩展性为 4 线程约 3.7 倍 NPS、8 线程约 6.3 倍、16 线程约 8.8 倍，
+    // 16 线程以上收益已明显递减，且桌面对局需要给界面/系统保留核心，故封顶 16。
+    const unsigned hardware = std::thread::hardware_concurrency();
+    if (hardware == 0u) {
+        // 查询失败（部分平台/沙箱环境返回 0）时的保守猜测。
+        return 4u;
+    }
+    if (hardware <= 2u) {
+        return 1u;
+    }
+    if (hardware <= 4u) {
+        return hardware - 1u;
+    }
+    return static_cast<uint32_t>(std::min<unsigned>(hardware - 2u, 16u));
+}
+
+void NineChess_AI_AB::refreshWeights()
+{
+    if (m_options.useCustomWeights) {
+        // 调参/实验模式：整行覆盖（winPressure 仍是选项，不在表内）。
+        m_weights = m_options.weights;
+        return;
+    }
+    m_weights = s_evalWeightsPerRule[m_root.getRuleIndex()];
+    if (m_options.stalematePressureWeight >= 0) {
+        m_weights.stalematePressure = m_options.stalematePressureWeight;
+    }
+    if (m_options.forkThreatWeight >= 0) {
+        m_weights.forkThreat = m_options.forkThreatWeight;
+    }
+}
+
 void NineChess_AI_AB::setChess(const NineChess& chess)
 {
     m_root = chess;
+    refreshWeights();
     m_requiredQuit.store(false);
     m_masterDone.store(false);
     m_lastCompletedDepth = 0;
@@ -64,7 +111,12 @@ void NineChess_AI_AB::clearTranspositionTable()
     }
     for (TTStore::Shard& shard : store.shards) {
         std::lock_guard<std::mutex> lock(shard.mutex);
-        shard.table.clear();
+        for (TTStore::TTBucket& bucket : shard.buckets) {
+            for (TTStore::TTSlot& slot : bucket.slotArray) {
+                slot.key = 0u;
+                slot.entry = TTEntry();
+            }
+        }
     }
 }
 
@@ -128,6 +180,8 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
     m_lastCompletedDepth = 0;
     m_lastCompletedValue = 0;
     resetStats();
+    m_hashVerifyFailed = false;
+    refreshWeights();
     m_rootScores.clear();
     m_timeDeadline = m_options.timeLimitMs > 0
         ? startTime + m_options.timeLimitMs : 0;
@@ -136,6 +190,13 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
     }
     if (depth < 0) {
         depth = 0;
+    }
+    // 动态深度：开局（摆子阶段）分支数约为中局的三倍，等深度下节点数差百倍量级，
+    // 同样的深度上限会让中局搜索“瞬间结束”而开局“耗尽预算”。
+    // 中局根局面追加 2 层，把固定深度模式下的时间预算向中局倾斜；
+    // 配合时间预算使用时该值只是抬高深度天花板，实际深度仍由预算决定。
+    if (m_options.dynamicDepth && m_root.getPhase() == GAME_MID) {
+        depth = std::min(depth + 2, kMaxPly - 1);
     }
     m_masterDone.store(false);
     seedRng();
@@ -189,6 +250,8 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
 void NineChess_AI_AB::runIterativeDeepening(SearchContext& ctx, int depth, bool isMaster)
 {
     ctx.lastCompletedDepth = 0;
+    // 局面刚被整体设置为根局面，增量哈希累加器需全量重建。
+    resetHardHashAccum(ctx);
     ctx.lastCompletedValue = evaluate(ctx, 0);
     ctx.bestMove = Move();
     ctx.bestMoveText = "error!";
@@ -216,6 +279,7 @@ void NineChess_AI_AB::runIterativeDeepening(SearchContext& ctx, int depth, bool 
         }
 
         ctx.board = m_root;
+        resetHardHashAccum(ctx);
         ctx.iterationAborted = false;
 
         int value = 0;
@@ -235,6 +299,7 @@ void NineChess_AI_AB::runIterativeDeepening(SearchContext& ctx, int depth, bool 
             }
             if (value <= narrowAlpha || value >= narrowBeta) {
                 ctx.board = m_root;
+                resetHardHashAccum(ctx);
                 ctx.iterationAborted = false;
                 delta *= 3;
                 narrowAlpha = ctx.lastCompletedValue - delta;
@@ -245,6 +310,7 @@ void NineChess_AI_AB::runIterativeDeepening(SearchContext& ctx, int depth, bool 
                 }
                 if (value <= narrowAlpha || value >= narrowBeta) {
                     ctx.board = m_root;
+                    resetHardHashAccum(ctx);
                     ctx.iterationAborted = false;
                     value = searchRoot(ctx, currentDepth, -INF_SCORE, INF_SCORE);
                     if (ctx.iterationAborted) {
@@ -309,6 +375,7 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
     const int gap = std::max(1, m_options.randomGap);
 
     ctx.board = m_root;
+    resetHardHashAccum(ctx);
     MoveList moves;
     generateMoves(ctx, moves);
     if (moves.count <= 1) {
@@ -324,6 +391,7 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
     {
         Snapshot snapshot;
         ctx.board = m_root;
+        resetHardHashAccum(ctx);
         applyMove(ctx, ctx.bestMove, snapshot);
         bestValue = search(ctx, depth - 1, -INF_SCORE, INF_SCORE, 1);
         undoMove(ctx, snapshot);
@@ -348,6 +416,7 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
 
         Snapshot snapshot;
         ctx.board = m_root;
+        resetHardHashAccum(ctx);
         applyMove(ctx, moves.moves[i], snapshot);
         const int value = search(ctx, depth - 1, alpha, INF_SCORE, 1);
         undoMove(ctx, snapshot);
@@ -503,8 +572,26 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
         return evaluate(ctx, ply);
     }
 
+    // 增量哈希校验：常态每 2048 个节点抽验一次，selfcheck 模式逐节点校验。
+    // 累加器与全量重算不一致说明差量维护有漏洞，立即中止搜索并置失败标志，
+    // 避免错误键值静默污染置换表。
+    if (!ctx.board.m_rule.allowRepeatedMills) {
+        const bool verifyNow = m_verifyHashAccum
+            || ((++ctx.hashVerifyCounter & 2047u) == 0u);
+        if (verifyNow && !verifyHardHashAccum(ctx)) {
+            ctx.hashVerifyFailed = true;
+            m_hashVerifyFailed = true;
+            ctx.iterationAborted = true;
+            return evaluate(ctx, ply);
+        }
+    }
+
     const int originalAlpha = alpha;
     const int originalBeta = beta;
+
+    // 本节点的置换表键只计算一次，probe 与 store 共用。
+    // canonical 模式下一次计算要跑 16 个视角哈希，原来 probe/store 各算一遍是纯浪费。
+    const uint64_t hash = makeSearchHash(ctx);
 
     int ttValue = 0;
     Move ttMove;
@@ -512,7 +599,7 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
     // - 精确命中时可以直接复用；
     // - 边界命中时可以先收紧窗口，再决定是否已经足够剪枝；
     // - 命中的最佳走法用于后续走法排序。
-    if (probeTransposition(ctx, depth, alpha, beta, ttValue, ttMove)) {
+    if (probeTransposition(ctx, hash, depth, alpha, beta, ttValue, ttMove)) {
         return ttValue;
     }
 
@@ -530,13 +617,37 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
     bool hasBestMove = false;
 
     for (size_t i = 0; i < moves.count; ++i) {
+        // PVS：首走法用当前窗口搜索；其余走法先以零宽窗口试探，
+        // 只有试探值落回 (alpha, beta) 内（可能是更优走法但值不精确）才全窗口重搜。
+        // 排序质量越高试探失败率越高，等效子树越小。
+        int childAlpha = alpha;
+        int childBeta = beta;
+        if (m_options.pvSearch && i > 0u && alpha > -INF_SCORE && beta < INF_SCORE) {
+            if (maximizing) {
+                childBeta = alpha + 1;
+            }
+            else {
+                childAlpha = beta - 1;
+            }
+        }
+
         Snapshot snapshot;
         applyMove(ctx, moves.moves[i], snapshot);
-        const int value = search(ctx, depth - 1, alpha, beta, ply + 1);
+        int value = search(ctx, depth - 1, childAlpha, childBeta, ply + 1);
         undoMove(ctx, snapshot);
 
         if (ctx.iterationAborted) {
             return value;
+        }
+
+        if (m_options.pvSearch && i > 0u && value > alpha && value < beta) {
+            // 试探发现可能的更优走法：全窗口重搜取得精确值。
+            applyMove(ctx, moves.moves[i], snapshot);
+            value = search(ctx, depth - 1, alpha, beta, ply + 1);
+            undoMove(ctx, snapshot);
+            if (ctx.iterationAborted) {
+                return value;
+            }
         }
 
         if (maximizing) {
@@ -582,7 +693,7 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
     }
 
     // 用进入节点时的原始窗口来决定 bestValue 是精确值、上界还是下界。
-    storeTransposition(ctx, depth, bestValue, originalAlpha, originalBeta,
+    storeTransposition(ctx, hash, depth, bestValue, originalAlpha, originalBeta,
         hasBestMove ? bestMoveAtNode : Move());
     return bestValue;
 }
@@ -676,34 +787,77 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply) const
         return evaluateTerminal(ctx, ply);
     }
 
-    const int onBoardDiff =
-        static_cast<int>(ctx.board.getPlayer1OnBoardCount())
-        - static_cast<int>(ctx.board.getPlayer2OnBoardCount());
+    const EvalWeights& w = m_weights;
+
+    // 掩码算一次、全函数共享（原先各 helper 各算一遍）。
+    const uint32_t board1 = ctx.board.boardOf(PLAYER1) & ctx.board.m_validBoardMask;
+    const uint32_t board2 = ctx.board.boardOf(PLAYER2) & ctx.board.m_validBoardMask;
+    const uint32_t occupied =
+        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
+        & ctx.board.m_validBoardMask;
+
+    const int onBoardDiff = static_cast<int>(POPCOUNT32(board1))
+        - static_cast<int>(POPCOUNT32(board2));
     const int inHandDiff =
         static_cast<int>(ctx.board.getPlayer1InHand())
         - static_cast<int>(ctx.board.getPlayer2InHand());
-    // 编号规则下，历史中已登记过的同编号三连不再视为可提三连。
-    const int millDiff = countClaimableMills(ctx, PLAYER1) - countClaimableMills(ctx, PLAYER2);
-    const int openMillDiff = countOpenMills(ctx, PLAYER1) - countOpenMills(ctx, PLAYER2);
-    const int pointValueDiff = countPointValue(ctx, PLAYER1) - countPointValue(ctx, PLAYER2);
 
-    int mobilityDiff = 0;
+    // 可提三连、活二、成三点同域扫描，一遍完成；
+    // 编号规则下，历史中已登记过的同编号三连不再视为可提三连。
+    int claimable1 = 0;
+    int openMill1 = 0;
+    int forkPoint1 = 0;
+    int claimable2 = 0;
+    int openMill2 = 0;
+    int forkPoint2 = 0;
+    countMillsAndOpenMills(ctx, PLAYER1, occupied, claimable1, openMill1, forkPoint1);
+    countMillsAndOpenMills(ctx, PLAYER2, occupied, claimable2, openMill2, forkPoint2);
+    const int millDiff = claimable1 - claimable2;
+    const int openMillDiff = openMill1 - openMill2;
+    const int pointValueDiff = countPointValue(ctx, board1) - countPointValue(ctx, board2);
+
+    int mobility1 = 0;
+    int mobility2 = 0;
     if (ctx.board.getPhase() == GAME_MID) {
-        mobilityDiff = countMobility(ctx, PLAYER1) - countMobility(ctx, PLAYER2);
+        mobility1 = countMobility(ctx, PLAYER1, occupied);
+        mobility2 = countMobility(ctx, PLAYER2, occupied);
     }
+    const int mobilityDiff = mobility1 - mobility2;
 
     int score = 0;
     if (ctx.board.getPhase() == GAME_NOTSTARTED || ctx.board.getPhase() == GAME_OPENING) {
-        score += onBoardDiff * 120;
-        score += inHandDiff * 48;
-        score += millDiff * 96;
-        score += openMillDiff * 24;
+        score += onBoardDiff * w.openingMaterial;
+        score += inHandDiff * w.openingInHand;
+        score += millDiff * w.openingMill;
+        score += openMillDiff * w.openingOpenMill;
     }
     else {
-        score += onBoardDiff * 180;
-        score += millDiff * 112;
-        score += openMillDiff * 32;
-        score += mobilityDiff * 10;
+        score += onBoardDiff * w.midMaterial;
+        score += millDiff * w.midMill;
+        score += openMillDiff * w.midOpenMill;
+        score += mobilityDiff * w.midMobility;
+
+        // 被闷杀压力：对手机动性枯竭时陡峭加分（blockedIsLoss 规则下低机动
+        // 逼近胜负；规则 2 被闷为轮空，价值较低，由权重表区分）。
+        // 默认权重 0，经 vs 对抗 A/B 验证后再定值。
+        if (w.stalematePressure != 0) {
+            if (mobility2 <= 3) {
+                score += (4 - mobility2) * w.stalematePressure;
+            }
+            if (mobility1 <= 3) {
+                score -= (4 - mobility1) * w.stalematePressure;
+            }
+        }
+    }
+
+    // 双三连威胁：成三点 ≥2 时每个"额外"成三点加一份分——
+    // 对手一手只能堵一个点，互不相同的成三点才是真威胁；
+    // 开局/中局都适用（摆子阶段的活二是主要威胁形态）。
+    // 默认权重 0，经 vs 对抗 A/B 验证后再定值。
+    if (w.forkThreat != 0) {
+        const int forkBonus1 = forkPoint1 >= 2 ? forkPoint1 - 1 : 0;
+        const int forkBonus2 = forkPoint2 >= 2 ? forkPoint2 - 1 : 0;
+        score += (forkBonus1 - forkBonus2) * w.forkThreat;
     }
 
     // 点位结构价值：优先占据穿线更多的点位（边中点 > 角点）。
@@ -711,9 +865,27 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply) const
 
     if (ctx.board.getAction() == ACTION_CAPTURE) {
         const int captureBonus =
-            (ctx.board.getPhase() == GAME_OPENING ? 160 : 220)
+            (ctx.board.getPhase() == GAME_OPENING ? w.captureOpening : w.captureMid)
             * static_cast<int>(ctx.board.getPendingCaptures());
         score += ctx.board.getTurn() == PLAYER1 ? captureBonus : -captureBonus;
+    }
+
+    // 胜利临近压力：判负条件是“在盘 + 手牌”总数低于 minPiecesToSurvive，
+    // 对手总数逼近该线时逐子加分，促使优势方主动转化子力优势，
+    // 而不是把局面磨到步数上限平局（实测深度 8 自对弈平局率约九成）。
+    if (m_options.winPressureWeight != 0) {
+        const uint32_t threshold = ctx.board.m_rule.minPiecesToSurvive + 2u;
+        const uint32_t total1 =
+            ctx.board.getPlayer1OnBoardCount() + ctx.board.getPlayer1InHand();
+        const uint32_t total2 =
+            ctx.board.getPlayer2OnBoardCount() + ctx.board.getPlayer2InHand();
+        const int pressure1 = total2 <= threshold
+            ? static_cast<int>(threshold - total2 + 1u) * m_options.winPressureWeight
+            : 0;
+        const int pressure2 = total1 <= threshold
+            ? static_cast<int>(threshold - total1 + 1u) * m_options.winPressureWeight
+            : 0;
+        score += pressure1 - pressure2;
     }
 
     return clampScore(score, -WIN_SCORE + ply, WIN_SCORE - ply);
@@ -994,7 +1166,21 @@ int NineChess_AI_AB::scoreCaptureMove(SearchContext& ctx, int32_t pos) const
 
 void NineChess_AI_AB::applyMove(SearchContext& ctx, const Move& move, Snapshot& snapshot)
 {
-    snapshot.data = ctx.board.m_data;
+    // 逐字段快照，不整体拷贝 ChessData：
+    // 编号规则的 millHistory 是 std::vector，整体拷贝会让每个节点两次堆分配，
+    // 是九连棋 NPS 低于普通规则的主要原因之一。搜索期间该表只会被
+    // addNewMills() 追加，记录长度即可在回溯时完整恢复。
+    NineChess::ChessData& data = ctx.board.m_data;
+    snapshot.status = data.status;
+    snapshot.player1Board = data.player1Board;
+    snapshot.player2Board = data.player2Board;
+    snapshot.forbiddenBoard = data.forbiddenBoard;
+    for (int i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
+        snapshot.numberBoards[i] = data.numberBoards[i];
+    }
+    snapshot.millHistorySize = data.millHistory.size();
+    snapshot.hardLayerAccum = ctx.hardLayerAccum;
+    snapshot.hardHistoryAccum = ctx.hardHistoryAccum;
     snapshot.winner = ctx.board.m_winner;
     snapshot.selectedPos = ctx.board.m_selectedPos;
 
@@ -1015,81 +1201,113 @@ void NineChess_AI_AB::applyMove(SearchContext& ctx, const Move& move, Snapshot& 
     default:
         break;
     }
+
+    // 编号规则：按差量更新 hard 哈希累加器。
+    // 层项：变化的层 XOR 掉旧项、并入新项；历史项：XOR 并入本步追加的记录。
+    // lite 规则的 millHistory 恒为空、编号层恒为 0，直接跳过。
+    if (!ctx.board.m_rule.allowRepeatedMills) {
+        for (int i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
+            const uint32_t oldLayer = snapshot.numberBoards[i];
+            const uint32_t newLayer = data.numberBoards[i];
+            if (oldLayer == newLayer) {
+                continue;
+            }
+            ctx.hardLayerAccum ^= hardHashLayerTerm(oldLayer, snapshot.player1Board,
+                snapshot.player2Board, static_cast<uint32_t>(i))
+                ^ hardHashLayerTerm(newLayer, data.player1Board,
+                    data.player2Board, static_cast<uint32_t>(i));
+        }
+        for (size_t k = snapshot.millHistorySize; k < data.millHistory.size(); ++k) {
+            ctx.hardHistoryAccum ^= hardHashHistoryTerm(data.millHistory[k]);
+        }
+    }
 }
 
 void NineChess_AI_AB::undoMove(SearchContext& ctx, const Snapshot& snapshot)
 {
-    ctx.board.m_data = snapshot.data;
+    NineChess::ChessData& data = ctx.board.m_data;
+    data.status = snapshot.status;
+    data.player1Board = snapshot.player1Board;
+    data.player2Board = snapshot.player2Board;
+    data.forbiddenBoard = snapshot.forbiddenBoard;
+    for (int i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
+        data.numberBoards[i] = snapshot.numberBoards[i];
+    }
+    // millHistory 只增不减，长度回滚即可覆盖搜索路径上的全部变化。
+    if (data.millHistory.size() > snapshot.millHistorySize) {
+        data.millHistory.resize(snapshot.millHistorySize);
+    }
+    // 增量累加器与局面快照严格同步回滚。
+    ctx.hardLayerAccum = snapshot.hardLayerAccum;
+    ctx.hardHistoryAccum = snapshot.hardHistoryAccum;
     ctx.board.m_winner = snapshot.winner;
     ctx.board.m_selectedPos = snapshot.selectedPos;
 }
 
-bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, int depth, int& alpha, int& beta,
-    int& value, Move& ttMove) const
+bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int depth,
+    int& alpha, int& beta, int& value, Move& ttMove) const
 {
-    // 哈希模式：
-    // - Plain：普通哈希，一次计算；
-    // - OpeningCanonical：开局节点把 16 个等价视角压成同一个 key，
-    //   中局回退到普通哈希，兼顾开局复用与中局 NPS；
-    // - FullCanonical：全部节点规范化（旧行为）。
-    const uint64_t hash = makeSearchHash(ctx);
+    // 哈希模式说明见 makeSearchHash()：hash 已由调用方算好传入（已雪崩混合）。
+    // 分片由哈希低 8 位路由，桶由第 8~17 位索引，桶内 2 槽依次探测。
     TTStore& store = s_ttStores[m_root.getRuleIndex()];
     TTStore::Shard& shard = store.shards[hash & (TTStore::SHARD_COUNT - 1u)];
+    TTStore::TTBucket& bucket =
+        shard.buckets[(hash >> 8) & (TTStore::BUCKET_COUNT - 1u)];
     std::lock_guard<std::mutex> lock(shard.mutex);
 
     ++ctx.stats.ttProbes;
 
-    const std::unordered_map<uint64_t, TTEntry>::iterator it = shard.table.find(hash);
-    if (it == shard.table.end()) {
+    TTEntry* entry = nullptr;
+    for (TTStore::TTSlot& slot : bucket.slotArray) {
+        if (slot.key == hash) {
+            entry = &slot.entry;
+            break;
+        }
+    }
+    if (entry == nullptr) {
         return false;
     }
 
-    TTEntry& entry = it->second;
-    entry.generation = m_generation;
+    entry->generation = m_generation;
 
-    if (entry.depth < depth) {
+    if (entry->depth < depth) {
         return false;
     }
 
     ++ctx.stats.ttHits;
-    value = entry.value;
+    value = entry->value;
 
-    if (entry.moveType != MOVE_NONE) {
-        ttMove.type = static_cast<MoveType>(entry.moveType);
-        ttMove.from = entry.moveFrom;
-        ttMove.to = entry.moveTo;
+    if (entry->moveType != MOVE_NONE) {
+        ttMove.type = static_cast<MoveType>(entry->moveType);
+        ttMove.from = entry->moveFrom;
+        ttMove.to = entry->moveTo;
     }
 
-    if (entry.flag == TT_EXACT) {
+    if (entry->flag == TT_EXACT) {
         // 精确值可直接返回，不需要继续展开子树。
         return true;
     }
-    if (entry.flag == TT_LOWER) {
+    if (entry->flag == TT_LOWER) {
         // 该节点真实值 >= entry.value，因此 alpha 可以直接抬高。
-        alpha = std::max(alpha, static_cast<int>(entry.value));
+        alpha = std::max(alpha, static_cast<int>(entry->value));
     }
     else {
         // 该节点真实值 <= entry.value，因此 beta 可以直接压低。
-        beta = std::min(beta, static_cast<int>(entry.value));
+        beta = std::min(beta, static_cast<int>(entry->value));
     }
 
     // 窗口被收紧到 alpha >= beta 时，说明这个节点已经足够让当前搜索剪枝。
     return alpha >= beta;
 }
 
-void NineChess_AI_AB::storeTransposition(SearchContext& ctx, int depth, int value,
+void NineChess_AI_AB::storeTransposition(SearchContext& ctx, uint64_t hash, int depth, int value,
     int alpha, int beta, const Move& bestMove) const
 {
-    const uint64_t hash = makeSearchHash(ctx);
     TTStore& store = s_ttStores[m_root.getRuleIndex()];
     TTStore::Shard& shard = store.shards[hash & (TTStore::SHARD_COUNT - 1u)];
+    TTStore::TTBucket& bucket =
+        shard.buckets[(hash >> 8) & (TTStore::BUCKET_COUNT - 1u)];
     std::lock_guard<std::mutex> lock(shard.mutex);
-
-    const size_t shardMax = std::max<size_t>(1u,
-        m_options.ttMaxEntries / TTStore::SHARD_COUNT);
-    if (shard.table.size() >= shardMax) {
-        pruneTranspositionStore(shard, shardMax);
-    }
 
     TTEntry entry;
     entry.value = static_cast<int16_t>(clampScore(value, -INF_SCORE, INF_SCORE));
@@ -1097,8 +1315,8 @@ void NineChess_AI_AB::storeTransposition(SearchContext& ctx, int depth, int valu
     entry.flag = TT_EXACT;
     entry.generation = m_generation;
     // 若 bestValue 没有跳出原窗口，则它是精确值；
-    // 若 bestValue <= alpha，说明这是一个“最多就这么好”的上界；
-    // 若 bestValue >= beta，说明这是一个“至少这么好”的下界。
+    // 若 bestValue <= alpha，说明这是一个"最多就这么好"的上界；
+    // 若 bestValue >= beta，说明这是一个"至少这么好"的下界。
     if (value <= alpha) {
         entry.flag = TT_UPPER;
     }
@@ -1114,15 +1332,45 @@ void NineChess_AI_AB::storeTransposition(SearchContext& ctx, int depth, int valu
 
     ++ctx.stats.ttStores;
 
-    TTEntry& slot = shard.table[hash];
-    if (slot.depth <= entry.depth) {
-        slot = entry;
+    // 写入策略：
+    // 1. 桶内已有同键槽位：维持旧版"深度大的覆盖，浅的只刷新代数"；
+    // 2. 否则优先占用空槽；两槽都非空且都非本键时，淘汰两槽中"较劣"者
+    //    （更老世代优先，其次更浅深度）。
+    const auto slotWorseThan = [generation = m_generation](
+        const TTStore::TTSlot& lhs, const TTStore::TTSlot& rhs) {
+        if (lhs.entry.generation != rhs.entry.generation) {
+            // 世代按"环回后更老"处理：与当前世代差距大者更劣。
+            const uint32_t ageL = generation - lhs.entry.generation;
+            const uint32_t ageR = generation - rhs.entry.generation;
+            return ageL > ageR;
+        }
+        return lhs.entry.depth < rhs.entry.depth;
+    };
+
+    TTStore::TTSlot* victim = nullptr;
+    for (TTStore::TTSlot& slot : bucket.slotArray) {
+        if (slot.key == hash) {
+            if (slot.entry.depth <= entry.depth) {
+                slot.entry = entry;
+            }
+            else {
+                // 已有条目比当前更深时仍然保留旧值，但刷新代数，
+                // 表示它在当前真实局面的搜索中仍然是活跃的。
+                slot.entry.generation = m_generation;
+            }
+            return;
+        }
+        if (slot.key == 0u) {
+            slot.key = hash;
+            slot.entry = entry;
+            return;
+        }
+        if (victim == nullptr || slotWorseThan(slot, *victim)) {
+            victim = &slot;
+        }
     }
-    else {
-        // 已有条目比当前更深时仍然保留旧值，但刷新代数，
-        // 表示它在当前真实局面的搜索中仍然是活跃的。
-        slot.generation = m_generation;
-    }
+    victim->key = hash;
+    victim->entry = entry;
 }
 
 void NineChess_AI_AB::beginTranspositionGeneration()
@@ -1136,95 +1384,51 @@ void NineChess_AI_AB::beginTranspositionGeneration()
     m_generation = store.generation;
 }
 
-void NineChess_AI_AB::pruneTranspositionStore(TTStore::Shard& shard, size_t shardMax) const
-{
-    if (shard.table.size() < shardMax) {
-        return;
-    }
-
-    TTStore& store = s_ttStores[m_root.getRuleIndex()];
-    uint32_t generation = 0u;
-    {
-        std::lock_guard<std::mutex> lock(store.metaMutex);
-        generation = store.generation;
-    }
-
-    struct Candidate {
-        uint64_t key = 0u;
-        uint32_t age = 0u;
-        int16_t depth = 0;
-        uint8_t flag = TT_EXACT;
-    };
-
-    std::vector<Candidate> candidates;
-    candidates.reserve(shard.table.size());
-
-    for (const auto& item : shard.table) {
-        const TTEntry& entry = item.second;
-        Candidate candidate;
-        candidate.key = item.first;
-        candidate.age = generation >= entry.generation
-            ? (generation - entry.generation)
-            : 0u;
-        candidate.depth = entry.depth;
-        candidate.flag = entry.flag;
-        candidates.push_back(candidate);
-    }
-
-    std::sort(candidates.begin(), candidates.end(),
-        [](const Candidate& lhs, const Candidate& rhs) {
-            if (lhs.age != rhs.age) {
-                return lhs.age > rhs.age;
-            }
-
-            const int lhsExactRank = lhs.flag == TT_EXACT ? 0 : 1;
-            const int rhsExactRank = rhs.flag == TT_EXACT ? 0 : 1;
-            if (lhsExactRank != rhsExactRank) {
-                return lhsExactRank > rhsExactRank;
-            }
-
-            if (lhs.depth != rhs.depth) {
-                return lhs.depth < rhs.depth;
-            }
-
-            return lhs.key < rhs.key;
-        });
-
-    const size_t targetSize = shardMax - (shardMax / 8u);
-    const size_t removeCount =
-        shard.table.size() > targetSize ? (shard.table.size() - targetSize) : 0u;
-
-    for (size_t i = 0; i < removeCount && i < candidates.size(); ++i) {
-        shard.table.erase(candidates[i].key);
-    }
-}
-
 uint64_t NineChess_AI_AB::makeSearchHash(SearchContext& ctx) const
 {
+    // 出口统一做一次 mix64 雪崩：
+    // lite 哈希的 48 位是按点位排列的稠密位展开（未混合），
+    // 若直接用低位做分片/桶索引，结构相近的局面会挤进同一槽位互相覆盖。
+    // 雪崩后任意位段都均匀，索引才能正确分散。
+    uint64_t hash = 0;
     switch (m_options.hashMode)
     {
     case HashMode::Plain:
-        return makePlainHash(ctx);
+        hash = makePlainHash(ctx);
+        break;
     case HashMode::OpeningCanonical:
         // 开局是唯一对称收益明显高于成本的阶段；
         // 进入中局后对称破缺，回退普通哈希换取 NPS。
         if (ctx.board.getPhase() == GAME_OPENING) {
-            return makeCanonicalHash(ctx);
+            hash = makeCanonicalHash(ctx);
         }
-        return makePlainHash(ctx);
+        else {
+            hash = makePlainHash(ctx);
+        }
+        break;
     case HashMode::FullCanonical:
     default:
-        return makeCanonicalHash(ctx);
+        hash = makeCanonicalHash(ctx);
+        break;
     }
+    return mix64(hash);
 }
 
 uint64_t NineChess_AI_AB::makePlainHash(SearchContext& ctx) const
 {
     // 与 canonical 视角完全一致的普通哈希：
     // 编号规则用 hard（含编号层与历史三连），普通规则用 lite。
-    uint64_t hash = ctx.board.m_rule.allowRepeatedMills
-        ? ctx.board.m_data.getHashLite()
-        : ctx.board.m_data.getHashHard();
+    // 编号规则的层项/历史项来自增量累加器（applyMove 差量更新、undoMove 快照恢复），
+    // 与全量重算逐位一致；lite 部分（status + 主位棋盘）本就只有十几次位运算，每次重算。
+    uint64_t hash = 0;
+    if (ctx.board.m_rule.allowRepeatedMills) {
+        hash = ctx.board.m_data.getHashLite();
+    }
+    else {
+        hash = hardHashCombine(ctx.board.m_data.getHashLite(),
+            ctx.hardLayerAccum, ctx.hardHistoryAccum,
+            ctx.board.m_data.millHistory.size());
+    }
 
     int32_t selectedPos = -1;
     if (ctx.board.getPhase() == GAME_MID
@@ -1234,6 +1438,45 @@ uint64_t NineChess_AI_AB::makePlainHash(SearchContext& ctx) const
         selectedPos = ctx.board.m_selectedPos;
     }
     return mixSelectedPos(hash, selectedPos);
+}
+
+void NineChess_AI_AB::resetHardHashAccum(SearchContext& ctx) const
+{
+    // 局面被整体替换（= m_root）后全量重建累加器；
+    // 平时由 applyMove/undoMove 差量维护，这里只在搜索边界调用。
+    ctx.hardLayerAccum = 0;
+    ctx.hardHistoryAccum = 0;
+    if (ctx.board.m_rule.allowRepeatedMills) {
+        return; // lite 规则不使用累加器
+    }
+
+    const NineChess::ChessData& data = ctx.board.m_data;
+    for (uint32_t i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
+        ctx.hardLayerAccum ^= hardHashLayerTerm(data.numberBoards[i],
+            data.player1Board, data.player2Board, i);
+    }
+    for (const NineChess::MillKey key : data.millHistory) {
+        ctx.hardHistoryAccum ^= hardHashHistoryTerm(key);
+    }
+}
+
+bool NineChess_AI_AB::verifyHardHashAccum(SearchContext& ctx) const
+{
+    const NineChess::ChessData& data = ctx.board.m_data;
+    uint64_t layerAccum = 0;
+    for (uint32_t i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
+        layerAccum ^= hardHashLayerTerm(data.numberBoards[i],
+            data.player1Board, data.player2Board, i);
+    }
+    if (layerAccum != ctx.hardLayerAccum) {
+        return false;
+    }
+
+    uint64_t historyAccum = 0;
+    for (const NineChess::MillKey key : data.millHistory) {
+        historyAccum ^= hardHashHistoryTerm(key);
+    }
+    return historyAccum == ctx.hardHistoryAccum;
 }
 
 uint64_t NineChess_AI_AB::makeCanonicalHash(SearchContext& ctx) const
@@ -1276,21 +1519,35 @@ uint64_t NineChess_AI_AB::mixSelectedPos(uint64_t hash, int32_t selectedPos) con
 }
 
 
-int NineChess_AI_AB::countClaimableMills(SearchContext& ctx, NineChess::Players player) const
+void NineChess_AI_AB::countMillsAndOpenMills(SearchContext& ctx, NineChess::Players player,
+    uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints) const
 {
+    // 单遍完成原先多遍线扫描：可提三连（三子成线）、活二（两子成线且第三点为空）、
+    // 成三点集合（活二唯一空位，用于识别真双三连威胁）。
     const uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
-    int count = 0;
+    int claimable = 0;
+    int openMills = 0;
+    uint32_t threatMask = 0;
     for (uint32_t lineId = 0; lineId < ctx.board.m_lineCount; ++lineId) {
-        if ((board & ctx.board.m_lineMasks[lineId]) != ctx.board.m_lineMasks[lineId]) {
-            continue;
+        const uint32_t mask = ctx.board.m_lineMasks[lineId];
+        const uint32_t ownCount = POPCOUNT32(board & mask);
+        if (ownCount == MILL) {
+            // 编号规则：历史中已登记过的同编号三连不能再提子，不再计入。
+            if (ctx.board.m_rule.allowRepeatedMills
+                || !isMillKeyInHistory(ctx, player, lineId)) {
+                ++claimable;
+            }
         }
-        // 编号规则：历史中已登记过的同编号三连不能再提子，不再计入。
-        if (!ctx.board.m_rule.allowRepeatedMills && isMillKeyInHistory(ctx, player, lineId)) {
-            continue;
+        else if (ownCount == 2u && POPCOUNT32(occupied & mask) == 2u) {
+            ++openMills;
+            // 该活二的成三点（线内唯一空位）；多个活二的成三点互不相同才是真威胁，
+            // 共点的双活二会被对手一手全堵死。
+            threatMask |= mask & ~occupied;
         }
-        ++count;
     }
-    return count;
+    outClaimable = claimable;
+    outOpen = openMills;
+    outForkPoints = static_cast<int>(POPCOUNT32(threatMask));
 }
 
 bool NineChess_AI_AB::isMillKeyInHistory(SearchContext& ctx, NineChess::Players player,
@@ -1339,33 +1596,13 @@ int32_t NineChess_AI_AB::nextPlacementNumber(SearchContext& ctx, NineChess::Play
     return static_cast<int32_t>(ctx.board.m_rule.piecesPerSide) - static_cast<int32_t>(inHand);
 }
 
-int NineChess_AI_AB::countOpenMills(SearchContext& ctx, NineChess::Players player) const
-{
-    const uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
-    const uint32_t occupied =
-        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
-        & ctx.board.m_validBoardMask;
-    int count = 0;
-
-    for (uint32_t lineId = 0; lineId < ctx.board.m_lineCount; ++lineId) {
-        const uint32_t mask = ctx.board.m_lineMasks[lineId];
-        const uint32_t ownBits = board & mask;
-        if (POPCOUNT32(ownBits) == 2u && POPCOUNT32(occupied & mask) == 2u) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-int NineChess_AI_AB::countMobility(SearchContext& ctx, NineChess::Players player) const
+int NineChess_AI_AB::countMobility(SearchContext& ctx, NineChess::Players player,
+    uint32_t occupied) const
 {
     if (ctx.board.getPhase() != GAME_MID) {
         return 0;
     }
 
-    const uint32_t occupied =
-        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
-        & ctx.board.m_validBoardMask;
     const uint32_t empty = (~occupied) & ctx.board.m_validBoardMask;
 
     if (ctx.board.getAction() == ACTION_CAPTURE && ctx.board.getTurn() == player) {
@@ -1501,12 +1738,12 @@ int NineChess_AI_AB::countOpenMillsAfterOccupy(SearchContext& ctx, NineChess::Pl
     return count;
 }
 
-int NineChess_AI_AB::countPointValue(SearchContext& ctx, NineChess::Players player) const
+int NineChess_AI_AB::countPointValue(SearchContext& ctx, uint32_t board) const
 {
     if (m_options.pointValueWeight == 0) {
         return 0;
     }
-    uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
+    board &= ctx.board.m_validBoardMask;
     int sum = 0;
     while (board != 0u) {
         sum += m_pointValue[CTZ32(board)];

@@ -47,6 +47,8 @@ private slots:
     void on_actionInvert_I_toggled(bool arg1);
     // 前后招的公共槽
     void on_actionRowChange();
+    // 控制器浏览行号/棋谱行数变化后的统一同步槽（选中行 + 导航键状态）
+    void onBrowseRowChanged(int row);
     void on_actionAutoRun_A_toggled(bool arg1);
     //void on_actionGiveUp_G_triggered();
     void on_actionLimited_T_triggered();
@@ -67,6 +69,8 @@ private slots:
 private:
     // 界面文件
     Ui::NineChessWindowClass ui;
+    // 把当前对局写入已关联的棋谱文件（含规则/限时限步头部；终局时含胜负平结果）
+    bool writeGameRecord();
     // 视图场景
     GameScene *scene;
     // 控制器
