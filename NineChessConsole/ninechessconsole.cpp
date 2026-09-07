@@ -403,7 +403,7 @@ void printSearchStats(const NineChess_AI_AB& ai)
         << "  重复命中: " << stats.repetitionHits.load() << "\n";
 }
 
-// search [depth] [timeMs] [hash] [random] [gap] [threads] [seed] [pv] [asp] [rep] [q] [dd] [pvs]
+// search [depth] [timeMs] [hash] [random] [gap] [threads] [seed] [pv] [asp] [rep] [q] [dd] [pvs] [ext] [lmr]
 void runSearchCommand(const std::string& argText, const NineChess& chess)
 {
     int64_t depth = 8;
@@ -419,11 +419,13 @@ void runSearchCommand(const std::string& argText, const NineChess& chess)
     int64_t q = 0;
     int64_t dd = 1;
     int64_t pvs = 0;
+    int64_t ext = 1;
+    int64_t lmr = 1;
 
     const std::vector<std::string> args = splitArgs(argText);
     int64_t* slots[] = { &depth, &timeMs, &hashMode, &randomLevel, &gap,
-        &threads, &seed, &pv, &asp, &rep, &q, &dd, &pvs };
-    for (size_t i = 0; i < args.size() && i < 13; ++i) {
+        &threads, &seed, &pv, &asp, &rep, &q, &dd, &pvs, &ext, &lmr };
+    for (size_t i = 0; i < args.size() && i < 15; ++i) {
         tryParseInt64(args[i], *slots[i]);
     }
 
@@ -443,13 +445,16 @@ void runSearchCommand(const std::string& argText, const NineChess& chess)
     options.quiescenceSearch = q != 0;
     options.dynamicDepth = dd != 0;
     options.pvSearch = pvs != 0;
+    options.forcedExtension = ext != 0;
+    options.lateMoveReductions = lmr != 0;
 
     std::cout << "AI 搜索: 规则=" << chess.getRule()->name
         << " 深度=" << depth << " 时限=" << timeMs << "ms"
         << " 哈希=" << hashMode << " 随机=" << randomLevel
         << " 线程=" << options.threads << " 种子=" << seed << " 点位价值=" << pv
         << " 窗口=" << asp << " 重复惩罚=" << rep << " 静默=" << q
-        << " 动态深度=" << (dd != 0) << " PVS=" << (pvs != 0) << "\n";
+        << " 动态深度=" << (dd != 0) << " PVS=" << (pvs != 0)
+        << " 延伸=" << (ext != 0) << " LMR=" << (lmr != 0) << "\n";
     if (options.threads > 1) {
         std::cout << "（Lazy SMP 多线程）\n";
     }
@@ -552,6 +557,14 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
                 ++bookRejects;
             }
             NineChess_AI_AB& ai = game.getTurn() == NineChess::PLAYER1 ? ai1 : ai2;
+            // 限步赛制：把当前剩余步数传入评估急迫项，促使优势方在限步前转化。
+            // 模型层不感知限步，提示值只存在于 AI 选项中。
+            {
+                NineChess_AI_AB::SearchOptions currentOptions = ai.getOptions();
+                currentOptions.stepsRemainingHint =
+                    static_cast<int32_t>(std::max<int64_t>(1, maxPlies - plies));
+                ai.setOptions(currentOptions);
+            }
             ai.setChess(game);
             ai.alphaBetaPruning(static_cast<int>(depth));
             NineChess_AI_AB::SearchStats stats;
@@ -604,7 +617,8 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
 // vs [games] [d1] [h1] [pv1] [d2] [h2] [pv2] [seed] [asp] [rep] [wp] [sp] [ft] [th]
 // 双方采用不同配置的对抗测试，用于强度 A/B。
 // asp/rep 对双方同时生效（对比"开 vs 关"的整体引擎行为）；
-// wp/sp/ft 只作用于引擎2（引擎1 恒为表默认），用于评估项 A/B。
+// wp/sp/ft/ext/lmr/ms/tp/sr 只作用于引擎2（引擎1 恒为默认/表值）；
+// ext/lmr/ms/tp 取 -1 表示沿用 SearchOptions 默认值，sr 为引擎2 的剩余步数提示（0 = 关）。
 // 奇偶局交替执先：偶数局引擎1 执先，奇数局引擎2 执先，
 // 消除当前评估下明显的执先优势对 A/B 结果的干扰。
 void runVsCommand(const std::string& argText, NineChess& chess)
@@ -623,11 +637,16 @@ void runVsCommand(const std::string& argText, NineChess& chess)
     int64_t sp = -1;
     int64_t ft = -1;
     int64_t th = 0;
+    int64_t ext = -1;
+    int64_t lmr = -1;
+    int64_t ms = -1;
+    int64_t tp = -1;
+    int64_t sr = 0;
 
     const std::vector<std::string> args = splitArgs(argText);
     int64_t* slots[] = { &games, &depth1, &hash1, &pv1, &depth2, &hash2, &pv2,
-        &seed, &asp, &rep, &wp, &sp, &ft, &th };
-    for (size_t i = 0; i < args.size() && i < 14; ++i) {
+        &seed, &asp, &rep, &wp, &sp, &ft, &th, &ext, &lmr, &ms, &tp, &sr };
+    for (size_t i = 0; i < args.size() && i < 19; ++i) {
         tryParseInt64(args[i], *slots[i]);
     }
     if (games <= 0) {
@@ -645,6 +664,8 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         << " 引擎1: 深度=" << depth1 << " 哈希=" << hash1 << " 点位价值=" << pv1
         << " | 引擎2: 深度=" << depth2 << " 哈希=" << hash2 << " 点位价值=" << pv2
         << " 胜利压力=" << wp << " 闷杀压力=" << sp << " 双三威胁=" << ft
+        << " 延伸=" << ext << " LMR=" << lmr << " 三连保护=" << ms
+        << " 连续阶段=" << tp << " 步数提示=" << sr
         << " 线程=" << (th > 0 ? th : static_cast<int64_t>(NineChess_AI_AB::defaultThreadCount()))
         << " 种子=" << seed << " 窗口=" << asp << " 重复惩罚=" << rep
         << "（奇偶局交替执先）\n";
@@ -693,6 +714,20 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         options.winPressureWeight = static_cast<int32_t>(wp);
         options.stalematePressureWeight = static_cast<int32_t>(sp);
         options.forkThreatWeight = static_cast<int32_t>(ft);
+        // ext/lmr/ms/tp < 0 表示沿用 SearchOptions 默认值，>= 0 时显式覆盖（A/B 用）。
+        if (ext >= 0) {
+            options.forcedExtension = ext != 0;
+        }
+        if (lmr >= 0) {
+            options.lateMoveReductions = lmr != 0;
+        }
+        if (ms >= 0) {
+            options.millSafetyWeight = static_cast<int32_t>(ms);
+        }
+        if (tp >= 0) {
+            options.taperedEval = tp != 0;
+        }
+        options.stepsRemainingHint = static_cast<int32_t>(sr);
         options.seed = static_cast<uint64_t>(seed + g * 2 + 2);
         ai2.setOptions(options);
 
@@ -717,6 +752,13 @@ void runVsCommand(const std::string& argText, NineChess& chess)
             const int64_t depth = firstTurn
                 ? (swapColors ? depth2 : depth1)
                 : (swapColors ? depth1 : depth2);
+            // 引擎2 的剩余步数提示随对局推进递减（sr = 0 表示关闭）。
+            if (sr > 0 && &ai == &ai2) {
+                NineChess_AI_AB::SearchOptions currentOptions = ai.getOptions();
+                currentOptions.stepsRemainingHint =
+                    static_cast<int32_t>(std::max<int64_t>(1, sr - plies));
+                ai.setOptions(currentOptions);
+            }
             ai.setChess(game);
             ai.alphaBetaPruning(static_cast<int>(depth));
             NineChess_AI_AB::SearchStats stats;

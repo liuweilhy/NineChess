@@ -3,6 +3,7 @@
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
+#include <atomic>
 #include "ninechess.h"
 #include "ninechess_ai_ab.h"
 
@@ -41,6 +42,13 @@ public slots:
     // 退出线程
     void stop();
 
+public:
+    // 限步赛制接线：控制层把步数上限传给 AI（0 = 不限步）。
+    // AI 在每手搜索前按“上限 - 当前命令数”折算剩余步数，
+    // 传入评估急迫项（SearchOptions::stepsRemainingHint），
+    // 促使子力领先方在限步判和前主动转化优势。模型层不感知限步。
+    void setStepsLimit(int limit) { stepsLimit_.store(limit, std::memory_order_relaxed); }
+
 private:
     // 玩家ID
     int id;
@@ -59,5 +67,7 @@ private:
     int aiDepth;
     // AI的限时（秒），作为 AI 原生时间预算 SearchOptions::timeLimitMs 的来源
     int aiTime;
+    // 限步赛制的步数上限（0 = 不限步）；控制层写、AI 线程读。
+    std::atomic<int> stepsLimit_{0};
 };
 

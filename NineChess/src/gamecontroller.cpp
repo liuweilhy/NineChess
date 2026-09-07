@@ -223,7 +223,12 @@ GameController::GameController(GameScene &scene, QObject *parent) : QObject(pare
     soundCache["win"]->setSource(QUrl("qrc:/sound/resources/sound/win.wav"));
 
     gameReset();
-    
+
+    // 限步赛制接线：把步数上限传给 AI 线程，评估急迫项据此推动优势转化
+    //（stepsLimit <= 0 时 AI 侧自动关闭急迫项）。
+    ai1.setStepsLimit(stepsLimit);
+    ai2.setStepsLimit(stepsLimit);
+
     connect(&ai1, &AiThread::calcStarted, this, &GameController::onAiCalcStarted);
     connect(&ai2, &AiThread::calcStarted, this, &GameController::onAiCalcStarted);
 
@@ -848,6 +853,9 @@ void GameController::setRule(int ruleNo, int stepLimited, int timeLimited)
         stepsLimit = stepLimited;
     if (timeLimited != -1)
         timeLimit = timeLimited;
+    // 同步限步赛制到 AI 线程（评估急迫项的提示来源）。
+    ai1.setStepsLimit(stepsLimit);
+    ai2.setStepsLimit(stepsLimit);
     // 设置模型规则，重置游戏
     chess.setRule(static_cast<uint32_t>(ruleNo));
 
@@ -1305,6 +1313,9 @@ bool GameController::command(const QString &cmd, bool update)
                 stepsLimit = steps;
             if (timeLimit >= 0)
                 this->timeLimit = timeLimit;
+            // 同步限步赛制到 AI 线程（评估急迫项的提示来源）。
+            ai1.setStepsLimit(stepsLimit);
+            ai2.setStepsLimit(stepsLimit);
             refreshTimeDisplays();
             return true;
         }

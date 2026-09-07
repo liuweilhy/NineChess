@@ -328,3 +328,6 @@ CMakeLists.txt.user*
 .trae
 
 dist
+
+# WorkBuddy AI workspace
+.workbuddy/

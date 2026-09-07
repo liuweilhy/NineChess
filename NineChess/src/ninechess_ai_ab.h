@@ -58,6 +58,9 @@ public:
                                          // （成三点数每多 1 个加一份；同点双活二不算）
         int32_t stalematePressure = 0;   // 被闷杀压力：中局对手机动性 ≤3 时每少一步的加分
                                          // （blockedIsLoss 规则收益最大；默认 0 待 A/B 定值）
+        int32_t millSafety = 0;          // 封闭三连保护：处于己方（当前）三连中的棋子数差
+                                         // 的加分。三连中的子按规则不可被提（除非全在三连），
+                                         // 是真实的子力安全度量；默认 0 待 A/B 定值。
     };
 
     // 搜索配置。setOptions() 修改后，对后续每次搜索生效。
@@ -83,10 +86,27 @@ public:
                                         // 实测 60 局对抗 8:2 压制关闭方，且后手 8 连胜。
         bool pvSearch = true;           // PVS：非首走法先以零宽窗口试探，失败高再重搜；
                                         // 实测开局节点数 -28%（走法排序质量决定收益），中局收益小。
+        bool forcedExtension = true;    // 强制提子延伸：走子成三后走子方被迫提子，该强制
+                                        // 节点深度不减 1（提子链有界：盘面子数单调递减），
+                                        // 让战术交换在主搜索内算清而不是留给静默搜索。
+                                        // 只在浅层（depth <= 2）延伸，避免深层节点膨胀。
+        bool lateMoveReductions = true; // LMR：排序靠后（i >= 4）、深度 >= 3 的静默走法
+                                        // （不成三、非提子、无 TT/杀手/高历史加成）
+                                        // 先减 1~2 层试探，失败高再恢复全深重搜。
+                                        // 开局分支 ~24、中局 ~8-10，是 PVS 之后的主要节点收益来源。
         int32_t stalematePressureWeight = -1; // 被闷杀压力覆盖值；<0 = 用规则权重表默认值
                                               // （vs 命令的 sp 参数 A/B 用）。
         int32_t forkThreatWeight = -1;        // 双三连威胁覆盖值；<0 = 用规则权重表默认值
                                               // （vs 命令的 ft 参数 A/B 用）。
+        int32_t millSafetyWeight = -1;        // 封闭三连保护覆盖值；<0 = 用规则权重表默认值
+                                              // （vs 命令的 ms 参数 A/B 用）。
+        bool taperedEval = false;             // 连续博弈阶段：开局/中局权重按“剩余手牌比例”
+                                              // 线性插值，消除摆子结束时的估值跳变；
+                                              // false = 保留原有的硬切换（vs 命令的 tp 参数 A/B 用）。
+        int32_t stepsRemainingHint = 0;       // 剩余步数提示（限步赛制下由控制层传入；
+                                              // 模型层不感知限步）。>0 时评估对子力领先方
+                                              // 随步数耗尽逐层加急迫分，推动优势转化，
+                                              // 缓解“磨到步数上限平局”；0 = 关闭。
         // 调参/实验用：true 时以 weights 整行覆盖规则权重表（tune 命令用）。
         bool useCustomWeights = false;
         EvalWeights weights{};
@@ -177,8 +197,11 @@ private:
         // 落点或提子目标点位。
         int8_t to = -1;
 
-        // 用于排序的启发式分值，分值越高越优先展开。
-        int16_t order = 0;
+        // 用于排序的分值。
+        // 走法生成时先写入静态启发分；orderMoves 会把它改写成
+        // “静态分 + TT/杀手/历史加成”的完整排序键（int32 足够容纳全部加成），
+        // 从而排序时直接比较该字段，orderKey 每个走法只计算一次。
+        int32_t order = 0;
     };
 
     struct MoveList {
@@ -226,26 +249,6 @@ private:
         int32_t selectedPos = -1;
     };
 
-    struct TTEntry {
-        // 该局面的缓存估值。
-        int16_t value = 0;
-
-        // 该估值对应的搜索深度；越大代表信息越可靠。
-        int16_t depth = 0;
-
-        // 估值类型：精确值、下界或上界。
-        uint8_t flag = 0;
-
-        // 该节点已知的最佳走法（用于下次搜索时优先展开）。
-        uint8_t moveType = MOVE_NONE;
-        int8_t moveFrom = -1;
-        int8_t moveTo = -1;
-
-        // 最近一次被当前真实局面搜索访问到的代号，
-        // 用于置换表老化清理时判断“新旧程度”。
-        uint32_t generation = 0;
-    };
-
     // 置换表分片：哈希低位路由到分片，各分片独立加锁。
     // 每个分片是定长桶数组，每桶 2 槽（开地址）：
     // - 相比 unordered_map，省掉每节点的堆分配/查找开销与
@@ -256,19 +259,36 @@ private:
     struct TTStore {
         static constexpr size_t SHARD_COUNT = 256;
 
-        // 每分片桶数（1024 桶 × 2 槽 × 256 分片 = 512K 条）。
-        static constexpr size_t BUCKET_COUNT = 1024;
+        // 每分片桶数（2048 桶 × 2 槽 × 256 分片 = 1M 条）。
+        static constexpr size_t BUCKET_COUNT = 2048;
         static constexpr size_t BUCKET_SLOTS = 2;
         static_assert((BUCKET_COUNT & (BUCKET_COUNT - 1)) == 0,
             "BUCKET_COUNT must be power of 2");
 
+        // 槽位（16 字节）：key + 两个打包字。
+        // 旧布局为 key + 逐字段条目（实际占 24 字节），压缩后
+        // 每桶 2 槽恰好 32 字节，正好对齐缓存行。
+        // metaA：value(16) | flag(2) | moveType(2) | from(5) | to(5)
+        // metaB：depth(8) | generation(16)
+        // from/to 存“值 + 1”（0 表示无），与 Move 的 from=-1 语义区分。
         struct TTSlot {
             // 槽位键；0 表示空槽（真实哈希为 0 的概率 2^-64，视作可随时覆盖）。
             uint64_t key = 0;
 
-            // 该键对应的置换表条目。
-            TTEntry entry;
+            // 打包字段 A：估值 / 条目类型 / 最佳走法。
+            uint32_t metaA = 0;
+
+            // 打包字段 B：深度 / 世代号。
+            uint32_t metaB = 0;
         };
+
+        // ---- 打包位布局常量 ----
+        static constexpr uint32_t TT_FLAG_SHIFT = 16;
+        static constexpr uint32_t TT_TYPE_SHIFT = 18;
+        static constexpr uint32_t TT_FROM_SHIFT = 20;
+        static constexpr uint32_t TT_TO_SHIFT = 25;
+        static constexpr uint32_t TT_GEN_SHIFT = 8;
+        static constexpr uint32_t TT_GEN_MASK = 0x00ffff00u;
 
         struct TTBucket {
             std::array<TTSlot, BUCKET_SLOTS> slotArray;
@@ -359,7 +379,18 @@ private:
         std::vector<std::pair<Move, int>> iterationRootScores;
 
         // 本搜索线各层的局面普通哈希（重复检测用，仅浅层写入）。
+        // 下标 0 在每次迭代开始时播种为根局面哈希，
+        // 使“走法循环转回根局面”也能被 back=2/4/6/8 的常规比较捕获。
         std::array<uint64_t, kMaxPly> positionHistory = {};
+
+        // 根局面之前的真实对局历史哈希（倒序不要求，按下标 0..count-1 为时间序）。
+        // 末位（count-1）即根局面。搜索浅层的重复检测除比较搜索线内哈希外，
+        // 还会比较这份轨迹，让引擎避开真实对局中已经出现过的循环
+        // （否则只能看见搜索路径内的重复，跨搜索边界的互磨检测不到）。
+        std::array<uint64_t, kRepetitionMaxPly + 2> realTrail = {};
+
+        // realTrail 中的有效条目数。
+        int realTrailCount = 0;
 
         // 编号规则 hard 哈希的增量累加器：
         // hardHashLayerTerm 的 XOR 累加（9 层）与 hardHashHistoryTerm 的 XOR 累加。
@@ -438,8 +469,9 @@ private:
     void orderMoves(SearchContext& ctx, MoveList& list, bool isRoot,
         const Move& ttMove, int ply) const;
 
-    // 计算单个走法的动态排序键（静态启发 + TT 走法/杀手/历史加成）。
-    int64_t orderKey(SearchContext& ctx, const Move& move, bool isRoot,
+    // 计算单个走法的完整排序键（静态启发 + TT 走法/杀手/历史加成）。
+    // 每个走法只调用一次，结果写回 move.order，排序阶段纯整数比较。
+    int32_t orderKey(SearchContext& ctx, const Move& move, bool isRoot,
         const Move& ttMove, int ply) const;
 
     // 历史启发表加成（按来源点+目标点累计的剪枝贡献）。
@@ -483,7 +515,6 @@ private:
 
     // 全量重算编号规则的 hard 哈希增量累加器（局面被整体替换时调用）。
     void resetHardHashAccum(SearchContext& ctx) const;
-
     // 校验增量累加器与全量重算是否逐位一致（节流调用 / selfcheck 逐节点调用）。
     bool verifyHardHashAccum(SearchContext& ctx) const;
 
@@ -493,6 +524,13 @@ private:
     // 普通（非规范化）局面哈希：编号规则 hard，普通规则 lite，
     // 并按需混入 selectedPos，与 canonical 视角的语义保持一致。
     uint64_t makePlainHash(SearchContext& ctx) const;
+
+    // 直接对任意局面全量计算普通哈希（语义与 makePlainHash 逐位一致，
+    // 但不依赖增量累加器）。供真实对局历史轨迹构建使用，频率低，全量重算没有开销问题。
+    uint64_t plainHashOfBoard(const NineChess& board) const;
+
+    // 回放真实对局命令历史，构建根局面之前的局面哈希轨迹（重复检测用）。
+    void buildRealHistoryTrail(const NineChess& chess);
 
     // 对所有对称变换生成哈希，取最小值作为规范化 key。
     uint64_t makeCanonicalHash(SearchContext& ctx) const;
@@ -508,12 +546,15 @@ private:
     // 按当前规则从 s_evalWeightsPerRule 取权重，并套用 SearchOptions 覆盖项。
     void refreshWeights();
 
-    // 单遍扫描全部连线，同时统计某一方“可提三连”、“活二”与"成三点"数量
-    // （三种统计的扫描域相同，合并后省去多遍线扫描；evaluate 热路径专用）。
+    // 单遍扫描全部连线，同时统计某一方“可提三连”、“活二”、"成三点"与
+    // “处于三连中的棋子掩码”（统计的扫描域相同，合并后省去多遍线扫描；
+    // evaluate 热路径专用）。
     // 成三点 = 该方活二唯一空位；多个活二落在不同成三点构成真双三连威胁。
-    // 编号规则下，历史中已登记过的同编号三连不再计入可提三连。
+    // 编号规则下，历史中已登记过的同编号三连不再计入可提三连，
+    // 但其棋子仍处于三连中（不可被提），照常计入 inMillMask。
     void countMillsAndOpenMills(SearchContext& ctx, NineChess::Players player,
-        uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints) const;
+        uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints,
+        uint32_t& outInMillMask) const;
 
     // 判断某一方在指定三连线上形成的三连，是否已登记在历史中。
     bool isMillKeyInHistory(SearchContext& ctx, NineChess::Players player, uint32_t lineId) const;
@@ -570,6 +611,10 @@ private:
 private:
     // 搜索开始时的根局面，不在递归中直接改动（多线程只读共享）。
     NineChess m_root;
+
+    // 根局面之前的真实对局历史普通哈希（setChess 时回放命令历史构建，
+    // 最多保留 kRepetitionMaxPly + 2 条；搜索开始时拷贝进各 SearchContext）。
+    std::vector<uint64_t> m_realHistoryHashes;
 
     // 当前生效的评估权重（setChess/alphaBetaPruning 时按规则从表取值，
     // 再套用 SearchOptions 的覆盖项）。

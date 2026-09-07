@@ -1,4 +1,5 @@
 #include <QDebug>
+#include <algorithm>
 #include "aithread.h"
 
 AiThread::AiThread(int id, QObject *parent) : QThread(parent),
@@ -69,6 +70,18 @@ void AiThread::run()
         }
 
         ai_ab.setChess(*chess);
+        // 限步赛制：按“上限 - 当前命令数”折算剩余步数，传入评估急迫项。
+        // 提示值只存在于 AI 选项中，模型层不感知限步。
+        {
+            const int stepsLimit = stepsLimit_.load(std::memory_order_relaxed);
+            if (stepsLimit > 0) {
+                const int remaining = stepsLimit
+                    - static_cast<int>(chess->getCmdList()->size());
+                NineChess_AI_AB::SearchOptions options = ai_ab.getOptions();
+                options.stepsRemainingHint = std::max(1, remaining);
+                ai_ab.setOptions(options);
+            }
+        }
         emit calcStarted();
         mutex.unlock();
 

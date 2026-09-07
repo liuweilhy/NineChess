@@ -156,28 +156,44 @@ NineChess::MillKey NineChessSymmetry::mapMillKey(NineChess::MillKey key, const S
 
 uint64_t NineChessSymmetry::viewHash(const NineChess& chess, const SymmetryVariant& view) const
 {
-    // 先把当前局面搬到“某个具体对称视角”下，再调用 NineChess 自带哈希。
+    // 先把当前局面搬到“某个具体对称视角”下，再计算该视角的局面哈希。
     // 对于普通规则，轻量哈希已足够；
     // 对于九连棋，还要带上 numberBoards + millHistory 才能区分历史相关状态。
-    NineChess::ChessData data;
-    data.status = chess.m_data.status;
-    data.player1Board = mapBoard(chess.m_data.player1Board, view, chess);
-    data.player2Board = mapBoard(chess.m_data.player2Board, view, chess);
-    data.forbiddenBoard = mapBoard(chess.m_data.forbiddenBoard, view, chess);
+    //
+    // 实现注意：旧版本为每个视角构造一个带 millHistory 的临时 ChessData，
+    // 编号规则下历史表非空时每视角一次堆分配（canonical 模式每节点 16 次）。
+    // 现改为全程栈上计算：
+    // - 位棋盘映射是逐位的单射变换，mapBoard(a) & mapBoard(b) == mapBoard(a & b)，
+    //   因此“映射后的层项”与“全量重算”逐位一致；
+    // - 历史项逐条 mapMillKey 后并入 XOR 累加，与集合语义一致；
+    // - lite 基哈希用栈上局部 ChessData（millHistory 保持为空，无堆分配）。
+    const uint32_t mappedP1 = mapBoard(chess.m_data.player1Board, view, chess);
+    const uint32_t mappedP2 = mapBoard(chess.m_data.player2Board, view, chess);
+    const uint32_t mappedForbidden = mapBoard(chess.m_data.forbiddenBoard, view, chess);
+
+    NineChess::ChessData liteData;
+    liteData.status = chess.m_data.status;
+    liteData.player1Board = mappedP1;
+    liteData.player2Board = mappedP2;
+    liteData.forbiddenBoard = mappedForbidden;
 
     if (chess.m_rule.allowRepeatedMills) {
-        return data.getHashLite();
+        return liteData.getHashLite();
     }
 
+    uint64_t layerAccum = 0;
     for (int32_t i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
-        data.numberBoards[i] = mapBoard(chess.m_data.numberBoards[i], view, chess);
+        layerAccum ^= hardHashLayerTerm(mapBoard(chess.m_data.numberBoards[i], view, chess),
+            mappedP1, mappedP2, static_cast<uint32_t>(i));
     }
 
-    data.millHistory.resize(chess.m_data.millHistory.size());
-    for (size_t i = 0; i < chess.m_data.millHistory.size(); ++i) {
-        data.millHistory[i] = mapMillKey(chess.m_data.millHistory[i], view, chess);
+    uint64_t historyAccum = 0;
+    for (const NineChess::MillKey key : chess.m_data.millHistory) {
+        historyAccum ^= hardHashHistoryTerm(mapMillKey(key, view, chess));
     }
-    return data.getHashHard();
+
+    return hardHashCombine(liteData.getHashLite(), layerAccum, historyAccum,
+        chess.m_data.millHistory.size());
 }
 
 uint64_t NineChessSymmetry::canonicalHash(const NineChess& chess) const
