@@ -91,6 +91,9 @@ void NineChess_AI_AB::refreshWeights()
 void NineChess_AI_AB::setChess(const NineChess& chess)
 {
     m_root = chess;
+    // 根随机 randomPlies 需要"当前已走手数"：命令历史即将从副本剥离（见下），
+    // 先在这里记录口径（摆/走/提各计 1，与限步判和同口径）。
+    m_rootPlyCount = static_cast<int32_t>(chess.getCmdList()->size());
     refreshWeights();
     m_requiredQuit.store(false);
     m_masterDone.store(false);
@@ -430,6 +433,12 @@ void NineChess_AI_AB::aggregateStats(const SearchContext* contexts, size_t count
 
 void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
 {
+    // randomPlies 限定：仅开局前 N 条命令内启用根随机，之后自动恢复纯最优。
+    // 开局对称等价着法多、随机损失小；中残局每一手都关键，且跳过候选
+    // 重打分还能省去整个精确打分阶段的时间开销。
+    if (m_options.randomPlies > 0 && m_rootPlyCount >= m_options.randomPlies) {
+        return;
+    }
     // 根节点随机选择的“精确打分”阶段：
     // 1. 迭代加深已保证 ctx.lastCompletedValue 是精确值（首个根走法以全窗口搜索）；
     // 2. 对其它根走法用窗口 [best-gap, +INF] 搜索：失败低（真实值 <= best-gap）直接排除；

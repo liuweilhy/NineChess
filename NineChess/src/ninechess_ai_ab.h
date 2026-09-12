@@ -69,6 +69,9 @@ public:
         uint32_t threads = defaultThreadCount(); // 并行线程数（>=1；Lazy SMP）
         uint32_t randomness = 0;    // 0 = 纯最优；>0 启用根节点随机（分差阈值 + 加权）
         int32_t randomGap = 60;     // 随机候选集与最优的分差阈值（估值单位）
+        int32_t randomPlies = 0;    // 仅根局面已走命令数 < N 时启用根随机，之后恢复纯最优；
+                                    // 0 = 不限制（全程随机，行为与旧版一致）。开局对称
+                                    // 等价着法多、随机损失小；中残局每一手都关键。
         HashMode hashMode = HashMode::OpeningCanonical;
         size_t ttMaxEntries = 256u * 1024u; // 置换表容量参考值；数组化后实际容量固定为
                                             // SHARD_COUNT × SLOT_COUNT = 512K，字段仅为兼容保留
@@ -646,6 +649,9 @@ private:
 
     // 最近一次搜索的耗时（毫秒）。
     int64_t m_lastSearchTimeMs = 0;
+
+    // setChess 时记录的根局面已走命令数（randomPlies 闸门用；历史随后从副本剥离）。
+    int32_t m_rootPlyCount = 0;
 
     // 当前 AI 实例正在使用的置换表 generation。
     uint32_t m_generation = 0;
