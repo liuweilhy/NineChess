@@ -10,11 +10,14 @@
 **   - 累计 100 条走子命令未分胜负判和（与 GUI 控制层 applyStepLimit 语义一致）
 **   - 旧引擎深度 8、单线程；新引擎深度 10、8 线程（其余搜索选项为默认值，
 **     含动态深度/PVS/静默搜索/强制提子延伸/LMR 等"新算法"组成特性）
-**   - 奇偶局交替执先；新引擎开启根节点随机（gap=60，项目对局默认配置，
-**     每局独立种子），保证 20 局样本多样性；旧引擎保持原样（自带随机排序）
+**   - 奇偶局交替执先；新引擎开启根节点随机（默认 rP9+g20：仅开局前 9 条命令内
+**     随机、带宽 20，每局独立种子），保证 20 局样本多样性；旧引擎保持原样（自带随机排序）
 **
-** 用法: AIBenchmark.exe [起始规则] [结束规则] [每规则局数] [旧深度] [新深度] [限时ms] [新线程数]
-** 缺省: AIBenchmark.exe 0 3 20 8 10 10000 8
+** 用法: AIBenchmark.exe [起始规则] [结束规则] [每规则局数] [旧深度] [新深度] [限时ms]
+**                      [新线程数] [纯最优0/1] [wp] [pv] [随机手数] [随机带宽]
+**       wp/pv = -1 表示用引擎默认（150/16）；pureBest=1 关闭根随机；
+**       随机手数 = -1 用默认 9（仅开局随机），0 = 全程随机（Console vs 的默认配置）。
+** 缺省: AIBenchmark.exe 0 3 20 8 10 10000 8 0 -1 -1 -1 -1
 ****************************************************************************/
 
 #include <windows.h>
@@ -53,6 +56,41 @@ void setConsoleUtf8()
 }
 
 FILE* g_verboseLog = nullptr;
+
+// A/B 隔离开关（命令行注入，缺省时行为与既有版本完全一致）：
+//   pureBest=1 关闭新引擎根节点随机（纯最优），用于隔离 randomPlies 的影响；
+//   wp/pv=-1 表示沿用引擎默认（wp=150、pv=16），>=0 时覆盖；
+//   rplies/rgap 同理（-1 = 默认 9/20）；rplies=0 即“全程随机”（Console vs 默认配置）。
+int g_pureBest = 0;
+int g_winPressure = -1;
+int g_pointValue = -1;
+int g_randomPlies = -1;
+int g_randomGap = -1;
+
+// 非 pureBest 时新引擎默认的随机配置（带宽 / 开局手数）。选项与标签共用同一
+// 常量，避免"改了选项忘了改标签"而再次产生错标的汇总文件。
+constexpr int kDefaultRandomGap = 20;
+constexpr int kDefaultRandomPlies = 9;
+
+// 新引擎实际配置的文本描述：横幅与汇总文件共用，避免出现与实际不符的
+// 硬编码标签（此前汇总文件写死 "随机gap=60"，而代码用的是 rP9+g20）。
+string describeNewEngineConfig()
+{
+    const string wp = g_winPressure >= 0 ? std::to_string(g_winPressure) : string("默认150");
+    const string pv = g_pointValue >= 0 ? std::to_string(g_pointValue) : string("默认16");
+    string rnd;
+    if (g_pureBest) {
+        rnd = "关";
+    }
+    else {
+        const int gap = g_randomGap >= 0 ? g_randomGap : kDefaultRandomGap;
+        const int plies = g_randomPlies >= 0 ? g_randomPlies : kDefaultRandomPlies;
+        rnd = plies > 0
+            ? "rP" + std::to_string(plies) + "+g" + std::to_string(gap)
+            : "全程+g" + std::to_string(gap);
+    }
+    return "随机=" + rnd + " wp=" + wp + " pv=" + pv;
+}
 
 void verbosePrintf(const char* fmt, ...)
 {
@@ -404,9 +442,20 @@ GameReport playOneGame(int rule, int game, bool oldIsPlayer1,
     NineChess_AI_AB::SearchOptions options;   // 全部默认值，仅覆盖赛制项
     options.timeLimitMs = timeLimitMs;
     options.threads = (uint32_t)newThreads;
-    options.randomness = 1;                   // 第八轮：仅开局随机制造多样性
-    options.randomGap = 20;                   // 开局候选带宽 20
-    options.randomPlies = 9;                  // 仅前 9 条命令内随机，中残局恢复纯最优
+    if (g_pureBest) {                         // 纯最优：关闭根节点随机
+        options.randomness = 0;
+    }
+    else {
+        options.randomness = 1;               // 第八轮：仅开局随机制造多样性
+        options.randomGap = g_randomGap >= 0 ? g_randomGap : kDefaultRandomGap;
+        options.randomPlies = g_randomPlies >= 0 ? g_randomPlies : kDefaultRandomPlies;
+    }
+    // wp < 0 必须"不赋值"才能保留引擎默认 150：SearchOptions::winPressureWeight
+    // 没有 -1 哨兵语义，直接写 -1 会让该项以 -1 参与估值（见 benchmark_may.cpp 同名注释）。
+    if (g_winPressure >= 0)
+        options.winPressureWeight = g_winPressure; // < 0 = 保留引擎默认 150
+    if (g_pointValue >= 0)
+        options.pointValueWeight = g_pointValue; // 默认 16
     options.seed = report.seed;
     aiNew.setOptions(options);
     aiNew.clearTranspositionTable();          // 每局清空，与 console vs 一致
@@ -613,6 +662,11 @@ int main(int argc, char* argv[])
     if (argc >= 6) newDepth = atoi(argv[5]);
     if (argc >= 7) timeLimitMs = atoi(argv[6]);
     if (argc >= 8) newThreads = atoi(argv[7]);
+    if (argc >= 9) g_pureBest = atoi(argv[8]);
+    if (argc >= 10) g_winPressure = atoi(argv[9]);
+    if (argc >= 11) g_pointValue = atoi(argv[10]);
+    if (argc >= 12) g_randomPlies = atoi(argv[11]);
+    if (argc >= 13) g_randomGap = atoi(argv[12]);
 
     // ---- 建输出目录 ----
     CreateDirectoryA("results", nullptr);
@@ -628,12 +682,13 @@ int main(int argc, char* argv[])
         fopen_s(&g_verboseLog, vname, "wb");
     }
 
-    printf("AIBenchmark: 旧引擎(深度%d, 单线程) vs 新引擎(深度%d, %d线程, 随机gap=60)\n",
-        oldDepth, newDepth, newThreads);
+    printf("AIBenchmark: 旧引擎(深度%d, 单线程) vs 新引擎(深度%d, %d线程, %s)\n",
+        oldDepth, newDepth, newThreads, describeNewEngineConfig().c_str());
     printf("赛制: 每步%dms强制出招, %d条命令未分胜负判和, 奇偶局交替执先\n\n",
         timeLimitMs, kStepsLimit);
-    verbosePrintf("AIBenchmark 旧深度=%d 新深度=%d 线程=%d 限时=%dms 局数=%d/规则\n",
-        oldDepth, newDepth, newThreads, timeLimitMs, gamesPerRule);
+    verbosePrintf("AIBenchmark 旧深度=%d 新深度=%d 线程=%d 限时=%dms 局数=%d/规则 新引擎配置: %s\n",
+        oldDepth, newDepth, newThreads, timeLimitMs, gamesPerRule,
+        describeNewEngineConfig().c_str());
 
     int totalOld = 0, totalNew = 0, totalDraw = 0, totalError = 0;
     const auto runStart = std::chrono::steady_clock::now();
@@ -721,8 +776,8 @@ int main(int argc, char* argv[])
         sprintf(sname, "results\\summary_%s.txt", tag);
         FILE* fp = nullptr;
         if (fopen_s(&fp, sname, "wb") == 0 && fp) {
-            fprintf(fp, "旧引擎(2018 a588f4a, 单线程, 深度%d) vs 新引擎(当前, %d线程, 深度%d, 随机gap=60)\n",
-                oldDepth, newThreads, newDepth);
+            fprintf(fp, "旧引擎(2018 a588f4a, 单线程, 深度%d) vs 新引擎(当前, %d线程, 深度%d, %s)\n",
+                oldDepth, newThreads, newDepth, describeNewEngineConfig().c_str());
             fprintf(fp, "赛制: 每步%dms强制出招, %d条命令判和, 奇偶局交替执先\n",
                 timeLimitMs, kStepsLimit);
             fprintf(fp, "总计: 旧%d胜 新%d胜 和%d 异常%d, 用时%.1f分钟\n",
