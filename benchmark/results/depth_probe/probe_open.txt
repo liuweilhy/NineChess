@@ -1,0 +1,17 @@
+rule=0 prefix=12 phase=OPENING
+--- 旧引擎(单线程) ---
+  depth  8 :       66 ms  best=(2,6)
+  depth  9 :      161 ms  best=(2,6)
+  depth 10 :      561 ms  best=(2,6)
+  depth 11 :     1951 ms  best=(3,3)
+  depth 12 :    12085 ms  best=(2,6)
+  (更深必然超时，停止探测)
+--- 新引擎(8线程) ---
+  depth  8 :       11 ms  完成深度=8 节点=0.14M  best=(1,5)
+  depth 10 :       18 ms  完成深度=10 节点=0.27M  best=(1,5)
+  depth 12 :       78 ms  完成深度=12 节点=1.16M  best=(1,5)
+  depth 14 :      394 ms  完成深度=14 节点=5.03M  best=(2,2)
+  depth 16 :     1135 ms  完成深度=16 节点=17.81M  best=(2,2)
+  depth 18 :     9644 ms  完成深度=18 节点=158.06M  best=(2,2)
+  depth 20 :    55378 ms  完成深度=20 节点=913.12M  best=(2,2)
+  (更深必然超时，停止探测)
