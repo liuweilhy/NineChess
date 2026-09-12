@@ -31,7 +31,6 @@
 #elif defined(_MSC_VER)
 #include <intrin.h>
 
-namespace ncmay {
 #define NCMAY_POPCOUNT32(x) __popcnt(x)
 #define NCMAY_POPCOUNT64(x) __popcnt64(x)
 #define NCMAY_CTZ32(x) _tzcnt_u32(x)
@@ -39,6 +38,11 @@ namespace ncmay {
 #else
 #error "No popcount/ctz implementation"
 #endif
+
+// 命名空间隔离必须在条件编译之外打开：原实现把 `namespace ncmay {` 放在了
+// _MSC_VER 分支内，而文件末尾的 `} // namespace ncmay` 是无条件的，导致
+// GCC/Clang 下既不打开命名空间又出现多余的收尾花括号（无法编译）。
+namespace ncmay {
 
 // ================== 基础常量 ==================
 // 三连固定为 3，同时也是大多数规则的赛点子数。

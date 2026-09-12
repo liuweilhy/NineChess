@@ -8,6 +8,9 @@
 #define NINECHESS
 
 #include <sys/timeb.h>
+// 2018 年原码依赖 MSVC 的传递包含取得 uint16_t/int16_t 等类型；GCC/Clang 下
+// <string>/<cstring>/<list> 不传递 <cstdint>，会直接编译失败。补上即可。
+#include <cstdint>
 #include <string>
 #include <cstring>
 #include <list>
@@ -311,7 +314,11 @@ private:
 
     // 招法命令行用于棋谱的显示和解析
     // 当前招法的命令行指令，即一招棋谱
-    char cmdline[32];
+    // 注：原作此处为 32，但 win() 里写入的 "Player1 no way to go. Player2 win!"
+    //     含结束符共 35 字节，会越界 3 字节（原实现落在 move_/cmdline 之后、
+    //     std::list 之前的结构体填充区，故在 MSVC 下侥幸无害）。32→64 只为消除
+    //     越界写，不改变任何取值或比较逻辑。
+    char cmdline[64];
 
     // 棋谱
     list <string> cmdlist;
