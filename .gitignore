@@ -331,3 +331,7 @@ dist
 
 # WorkBuddy AI workspace
 .workbuddy/
+
+# benchmark 运行产生的对局棋谱：只留本地，不入库（配置与比分见各目录 REPORT.md / RESULTS_INDEX.md）
+rule*_g*.txt
+benchmark/**/rule*_g*.txt

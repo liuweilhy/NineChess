@@ -70,4 +70,3 @@ private:
     // 限步赛制的步数上限（0 = 不限步）；控制层写、AI 线程读。
     std::atomic<int> stepsLimit_{0};
 };
-

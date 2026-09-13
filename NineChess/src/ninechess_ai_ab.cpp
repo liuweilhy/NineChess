@@ -10,8 +10,6 @@
 #include <utility>
 #include <vector>
 
-std::array<NineChess_AI_AB::TTStore, RULE_COUNT> NineChess_AI_AB::s_ttStores = {};
-
 // 按规则的评估权重表。四行初始值相同（等于历史魔数），后续调参按行独立修改；
 // 各列含义见 EvalWeights 字段注释。
 //        开局: 子 手牌 三连 活二 | 中局: 子 三连 活二 机动 | 提子: 开局 中局 | 双三 闷杀 安全
@@ -24,7 +22,7 @@ const NineChess_AI_AB::EvalWeights NineChess_AI_AB::s_evalWeightsPerRule[RULE_CO
 
 namespace {
 
-// ===== 临时测量用（测完回退）：评估耗时占比 =====
+// ===== 哈希雪崩：进 TT 前把稠密位展开的键打散 =====
 inline uint64_t mix64(uint64_t value)
 {
     value ^= value >> 30;
@@ -165,7 +163,7 @@ uint64_t NineChess_AI_AB::plainHashOfBoard(const NineChess& board) const
 
 void NineChess_AI_AB::clearTranspositionTable()
 {
-    TTStore& store = s_ttStores[m_root.getRuleIndex()];
+    TTStore& store = *m_tt;
     {
         std::lock_guard<std::mutex> lock(store.metaMutex);
         store.generation = 0u;
@@ -277,7 +275,7 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
         return m_lastCompletedValue;
     }
 
-    // Lazy SMP：N 个线程各自独立跑同一套迭代加深，共享分片置换表；
+    // Lazy SMP：N 个线程各自独立跑同一套迭代加深，共享本实例的分片置换表；
     // 工作线程的搜索结果通过置换表反馈给主线程的后续迭代。
     std::vector<SearchContext> contexts(threadCount);
     std::vector<std::thread> workers;
@@ -443,14 +441,21 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
     }
     // 根节点随机选择的“精确打分”阶段：
     // 1. 迭代加深已保证 ctx.lastCompletedValue 是精确值（首个根走法以全窗口搜索）；
-    // 2. 对其它根走法用窗口 [best-gap, +INF] 搜索：失败低（真实值 <= best-gap）直接排除；
-    //    beta=INF 意味着不可能失败高，因此候选走法的分数全部是精确值；
+    // 2. 对其它根走法以“根方视角分差 ≤ gap”为候选窗口重搜，取得全部精确分数。
+    //    评估值是 P1 视角，根方可能是最小化方（后手），窗口方向与比较符必须
+    //    按根方视角换算（2026-09-14 前按 P1 固定视角写死：后手根的候选窗口
+    //    形同虚设、softmax 权重反向，会主动选中差距最大的劣招）；
     // 3. 候选集内按 softmax 权重随机选一个，杜绝“第二名很臭”的走法被选中。
     const int depth = ctx.lastCompletedDepth;
     if (depth < 1) {
         return;
     }
     const int gap = std::max(1, m_options.randomGap);
+    const bool rootMaximizing = ctx.board.getTurn() == PLAYER1;
+    // 根方视角值：根方在自己的视角下最大化（后手 = -P1 视角）。
+    const auto toRootPov = [rootMaximizing](int value) {
+        return rootMaximizing ? value : -value;
+    };
 
     ctx.board = m_root;
     resetHardHashAccum(ctx);
@@ -477,7 +482,6 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
             return;
         }
     }
-    const int alpha = std::max(-INF_SCORE, bestValue - gap);
 
     std::vector<std::pair<Move, int>> exact;
     exact.reserve(moves.count);
@@ -492,35 +496,52 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
             break;
         }
 
+        // 候选窗口 = 根方视角分差 ≤ gap 的闭区间，边界各放开 1 分让分差
+        // 恰为 gap 的走法取得精确值并通过比较符：
+        // 先手根（最大化）：窗口 [best-gap-1, +INF]，保留 value > best-gap-1；
+        // 后手根（最小化）：窗口 [-INF, best+gap+1]，保留 value < best+gap+1。
         Snapshot snapshot;
         ctx.board = m_root;
         resetHardHashAccum(ctx);
         applyMove(ctx, moves.moves[i], snapshot);
-        const int value = search(ctx, depth - 1, alpha, INF_SCORE, 1);
+        int value = 0;
+        bool withinGap = false;
+        if (rootMaximizing) {
+            const int alpha = std::max(-INF_SCORE, bestValue - gap - 1);
+            value = search(ctx, depth - 1, alpha, INF_SCORE, 1);
+            withinGap = value > alpha;
+        }
+        else {
+            const int beta = std::min(INF_SCORE, bestValue + gap + 1);
+            value = search(ctx, depth - 1, -INF_SCORE, beta, 1);
+            withinGap = value < beta;
+        }
         undoMove(ctx, snapshot);
 
         if (ctx.iterationAborted) {
             break;
         }
-        if (value > alpha) {
+        if (withinGap) {
             exact.push_back(std::make_pair(moves.moves[i], value));
         }
     }
 
+    // 按根方视角降序：最优走法在前（rootScoresText 按此顺序显示）。
     std::sort(exact.begin(), exact.end(),
-        [](const std::pair<Move, int>& lhs, const std::pair<Move, int>& rhs) {
-            return lhs.second > rhs.second;
+        [&](const std::pair<Move, int>& lhs, const std::pair<Move, int>& rhs) {
+            return toRootPov(lhs.second) > toRootPov(rhs.second);
         });
     ctx.rootScores = exact;
 
     if (m_options.randomness > 0 && exact.size() > 1) {
         const double temperature = std::max(1.0, static_cast<double>(gap) / 3.0);
-        const double bestScore = static_cast<double>(exact.front().second);
+        const double bestScore = static_cast<double>(toRootPov(exact.front().second));
         std::vector<double> weights;
         weights.reserve(exact.size());
         double total = 0.0;
         for (const auto& item : exact) {
-            const double w = std::exp((static_cast<double>(item.second) - bestScore) / temperature);
+            const double w = std::exp(
+                (static_cast<double>(toRootPov(item.second)) - bestScore) / temperature);
             weights.push_back(w);
             total += w;
         }
@@ -1631,7 +1652,7 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
 {
     // 哈希模式说明见 makeSearchHash()：hash 已由调用方算好传入（已雪崩混合）。
     // 分片由哈希低 8 位路由，桶由第 8~18 位索引，桶内 2 槽依次探测。
-    TTStore& store = s_ttStores[m_root.getRuleIndex()];
+    TTStore& store = *m_tt;
     TTStore::Shard& shard = store.shards[hash & (TTStore::SHARD_COUNT - 1u)];
     TTStore::TTBucket& bucket =
         shard.buckets[(hash >> 8) & (TTStore::BUCKET_COUNT - 1u)];
@@ -1707,7 +1728,7 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
 void NineChess_AI_AB::storeTransposition(SearchContext& ctx, uint64_t hash, int depth, int value,
     int alpha, int beta, const Move& bestMove, int ply) const
 {
-    TTStore& store = s_ttStores[m_root.getRuleIndex()];
+    TTStore& store = *m_tt;
     TTStore::Shard& shard = store.shards[hash & (TTStore::SHARD_COUNT - 1u)];
     TTStore::TTBucket& bucket =
         shard.buckets[(hash >> 8) & (TTStore::BUCKET_COUNT - 1u)];
@@ -1805,7 +1826,7 @@ void NineChess_AI_AB::storeTransposition(SearchContext& ctx, uint64_t hash, int 
 
 void NineChess_AI_AB::beginTranspositionGeneration()
 {
-    TTStore& store = s_ttStores[m_root.getRuleIndex()];
+    TTStore& store = *m_tt;
     std::lock_guard<std::mutex> lock(store.metaMutex);
     ++store.generation;
     if (store.generation == 0u) {
@@ -2147,6 +2168,10 @@ int NineChess_AI_AB::countClaimableMillsAfterOccupy(SearchContext& ctx, NineChes
     return count;
 }
 
+// 返回值：board 中每个在盘点位的结构价值之和（单方口径，非双方差值）。
+// 每点价值 = 该点穿过的连线数（m_pointValue 在 setChess 时按 m_posLineCount 填表）。
+// evaluate() 对双方各调一次、相减得到差值，再乘 pointValueWeight 计入总分；
+// pointValueWeight 为 0（点位价值关闭）时直接返回 0，跳过逐点求和。
 int NineChess_AI_AB::countPointValue(SearchContext& ctx, uint32_t board) const
 {
     if (m_options.pointValueWeight == 0) {

@@ -8,8 +8,10 @@
 
 - **2018版**：提交 a588f4a 的引擎副本（`old_engine/`，namespace ncold）。
 - **5月版**：提交 d78811a 的引擎副本（`may_engine/`，namespace ncmay）。
-- **9D版**：自提交 de1d52e 起的当前引擎（`NineChess/src`，含 2026-09-13
-  浅层剪枝/单遍估值/战术生成/静态分融合/历史三连查表/胜负分 ply 修正等批次）。
+- **9月版**：自提交 de1d52e 起的当前引擎（`NineChess/src`，含 2026-09-13
+  浅层剪枝/单遍估值/战术生成/静态分融合/历史三连查表/胜负分 ply 修正等批次）；
+  2026-09-14 起以当前最新代码定稿并更名 **9月版**（原称 **9D版**，旧称弃用），
+  含后手根随机视角修复、GUI 默认深度 10 / randomGap 16。
   该称谓只在 benchmark 语境内使用（结果报告、索引、与 AI Agent 的对话）；
   源码与算法文档仍称"当前版/新引擎"。
 
@@ -21,6 +23,7 @@ benchmark/
 ├── benchmark.cpp                驱动①：2018版 vs 当前版（支持随机/评估项参数）
 ├── benchmark_may.cpp            驱动②：2026-05版 vs 当前版（带评估项 A/B 开关）
 ├── benchmark_old_may.cpp        驱动③：2018版 vs 2026-05版
+├── benchmark_self.cpp           驱动④：当前引擎自对弈（先后手胜率/和棋率测量）
 ├── depthprobe.cpp               工具：各局面/各深度真实耗时探测
 ├── replay_debug.cpp             工具：双模型逐命令回放比对（调试规则分歧用）
 ├── test_oldmill.cpp             工具：成三判定对照小测试（调试遗留）
@@ -28,12 +31,14 @@ benchmark/
 │                                仅宏/命名空间机械改动，零算法改动；其置换表在原码中即被注释停用）
 ├── may_engine/                  2026-05-05 提交 d78811a 源码副本（namespace ncmay 隔离，
 │                                确认单线程、无 SearchOptions）
-├── bin/                         编译产物（三个对局程序 + 三个工具）
+├── bin/                         编译产物（对局驱动 ×4 + 控制台/工具）
 ├── build_*.bat                  自包含构建脚本（VS2019 v142，/O2 /utf-8）
 └── results/                     全部比赛数据与报告（见 results/RESULTS_INDEX.md）
     ├── RESULTS_INDEX.md         全部实验比分总表
     ├── run01..run08_*           2018版 vs 当前版 八轮随机配置实验（规则0×20局/轮）
     ├── may_vs_current/          5月版 vs 当前版（4规则×20局=80局）
+    ├── may_vs_current_5s80/     5月版(d8) vs 9月版(d10) 后手视角修复后复测（2026-09-14，80局）
+    ├── selfplay_r0_5s80/        9月版自对弈（规则0×20局，2026-09-14）
     ├── old2018_vs_may/          2018版 vs 5月版（规则0×20局，同深度8）
     └── evalab_A/B/C/            评估项隔离实验（纯最优 / 关winPressure / 再关pointValue）
 ```
@@ -46,7 +51,8 @@ benchmark/
 build_benchmark.bat   &  bin\AIBenchmark.exe
 build_may.bat         &  bin\AIBenchmarkMay.exe
 build_oldmay.bat      &  bin\AIBenchmarkOldMay.exe
-build_tools.bat       &  bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe
+build_self.bat        &  bin\AIBenchmarkSelf.exe
+build_tools.bat       &  bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe
 ```
 
 用法速查：
@@ -54,11 +60,15 @@ build_tools.bat       &  bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe
 ```text
 AIBenchmark.exe     [起始规则] [结束规则] [每规则局数] [旧深度] [新深度] [限时ms] [新线程数]
                     当前源码内置新引擎配置：randomness=1, randomGap=20, randomPlies=9
-AIBenchmarkMay.exe  [规则1] [规则2] [局数] [5月深度] [新深度] [限时ms] [新线程数] [纯最优0/1] [wp] [pv]
-                    wp/pv=-1 表示用引擎默认（150/16）；pureBest=1 时关闭根随机
+AIBenchmarkMay.exe  [规则1] [规则2] [局数] [5月深度] [新深度] [限时ms] [新线程数] [纯最优0/1] [wp] [pv] [判和步数,默认100]
+                    wp/pv=-1 表示用引擎默认（150/16）；pureBest=1 时关闭根随机；
+                    非 pureBest 时随机参数不再写死，直接用引擎头文件当前默认
 AIBenchmarkOldMay.exe [规则] [局数] [2018深度] [5月深度] [限时ms]
+AIBenchmarkSelf.exe [起始规则] [结束规则] [每规则局数] [深度] [限时ms] [线程数] [判和步数,默认100]
+                    当前引擎自对弈（两侧独立AI实例/置换表/种子）；随机/评估参数一律用引擎默认
 DepthProbe.exe      [规则] [棋谱文件] [前缀命令数]
 ReplayDebug.exe     [棋谱文件]
+EvalProbe.exe       [每配置随机对局数，默认 120]   评估评分标准验证：独立重算 §1.8 口径 vs 引擎 depth-0 静态评估
 ```
 
 对局机制约定（各驱动一致）：
@@ -80,7 +90,9 @@ ReplayDebug.exe     [棋谱文件]
 | 5月版 vs 当前版（深度封顶时代） | 4规则×20局，深度10/10，单线程 vs 8线程 | 38:23 当前版落后（rP10+g30 配置）；纯最优三臂 17:29 / 18:26 / 20:25 |
 | **5月版 vs 当前版（限时深度放开后）** | 4规则×10局×两档预算（1s/3s每步），纯最优 | **4:23:13 与 4:28:8，当前版碾压**（平均完成深度 19~20） |
 | **2018版 vs 当前版（限时深度放开后）** | 规则0×10局，1s/步，深度8 | **0:9:1，当前版一局不失** |
+| **5月版 vs 9月版（后手视角修复后）** | 4规则×20局，5月d8 vs 新d10·8线程，5s/步，80步判和，默认随机rP10+g24 | **13:50:17，当前版碾压**（深度封顶10未触限时；执先28/40、执后22/40） |
 | 2018版 vs 5月版 | 规则0×20局，同深度8 | 5:14，5月版明显更强 |
+| 9月版自对弈（规则0） | 规则0×20局，深度10·8线程，5s/步，80步判和，默认随机 | 先手8:后手4:和8（12决胜局先手占67%，约1.2σ） |
 
 ## 关键结论
 
@@ -95,6 +107,10 @@ ReplayDebug.exe     [棋谱文件]
    （2026-09-12 修复驱动后重跑，详见 `results/evalab_*/CORRECTION.md`）。当前版默认评估无需调整。
 4. 根节点随机在对抗中是纯负资产（带宽大小无关紧要，"开不开"才是决定性的）；
    多样性需求应交给开局库或 `randomPlies`（本轮已实现并加入引擎）。
+   **2026-09-14 修订**：该结论描述的是含后手根视角 bug 的引擎——`applyExactRootScoring`
+   曾按 P1 固定视角写死候选窗口与 softmax，后手根会主动选劣招。修复后同样开启
+   开局随机的默认配置（rP10+g24）对 5月版 50:13 大胜且执先/执后对称（28/40 vs 22/40）；
+   修复后"随机 vs 纯最优"的残差是否仍存在未测。详见 `results/may_vs_current_5s80/REPORT.md`。
 5. 规则 0 的先手优势极大：任何一方执先对"会犯开局漂移错误的对手"近乎必胜。
 
 ## 注意事项

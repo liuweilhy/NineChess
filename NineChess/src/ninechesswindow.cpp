@@ -129,6 +129,27 @@ void NineChessWindow::closeEvent(QCloseEvent *event)
     QMainWindow::closeEvent(event);
 }
 
+void NineChessWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    // 停靠栏初始宽度由内容控件的sizeHint决定（QListView缺省hint为256x192，偏宽），
+    // 显示前已在ui里用maximumWidth=128钳住列表，使首次布局时停靠栏保持较窄。
+    // 注意不能在showEvent里立即解除钳制：首次布局激活可能尚未完成（解除动作
+    // 本身也会触发重新布局），布局会按256宽的缺省sizeHint把停靠栏重新撑宽，
+    // 表现为打开窗口后停靠栏先窄后宽地抖动。
+    // 因此推迟到事件队列排空、布局稳定后再解除，并用resizeDocks把当前宽度
+    // 固定下来（等效用户手动拖动过一次），后续重新布局不会回弹到缺省hint宽度；
+    // 此后停靠栏即可自由拖宽拖窄（单纯setFixedWidth则无法再调节）
+    if (listWidthClamped) {
+        listWidthClamped = false;
+        QTimer::singleShot(0, this, [this] {
+            const int width = ui.dockWidget->width();
+            ui.listView->setMaximumWidth(QWIDGETSIZE_MAX);
+            resizeDocks({ ui.dockWidget }, { width }, Qt::Horizontal);
+        });
+    }
+}
+
 bool NineChessWindow::eventFilter(QObject *watched, QEvent *event)
 {
     // 重载这个函数只是为了让规则菜单（动态）显示提示
@@ -236,6 +257,23 @@ void NineChessWindow::initialize()
 
     // 关联列表视图和字符串列表模型
     ui.listView->setModel(game->getManualListModel());
+    // 追加新招后自动选中最后一行：rowsInserted置标志，dataChanged落到末行时选中并滚到底
+    // （等价于原先在派生视图里重载rowsInserted/dataChanged的做法）
+    QAbstractItemModel *manualModel = game->getManualListModel();
+    connect(manualModel, &QAbstractItemModel::rowsInserted, this, [this] {
+        newManualRow = true;
+    });
+    connect(manualModel, &QAbstractItemModel::dataChanged, this,
+        [this, manualModel](const QModelIndex &, const QModelIndex &bottomRight) {
+            if (!newManualRow)
+                return;
+            const QModelIndex last = manualModel->index(manualModel->rowCount() - 1, 0);
+            if (bottomRight == last) {
+                ui.listView->setCurrentIndex(last);
+                ui.listView->scrollToBottom();
+                newManualRow = false;
+            }
+        });
     // 因为QListView的rowsInserted在setModel之后才能启动，
     // 第一次需手动初始化选中listView第一项
     //qDebug() << ui.listView->model();
@@ -254,7 +292,8 @@ void NineChessWindow::initialize()
     connect(ui.actionEnd_E, &QAction::triggered,
         this, &NineChessWindow::on_actionRowChange);
     // 手动在listView里选择招法后更新的槽
-    connect(ui.listView, &ManualListView::currentChangedSignal,
+    // QItemSelectionModel自带currentChanged信号，无需派生视图转发
+    connect(ui.listView->selectionModel(), &QItemSelectionModel::currentChanged,
         this, &NineChessWindow::on_actionRowChange);
     // 初始化导航键状态
     onBrowseRowChanged(game->browseRow());
@@ -640,8 +679,10 @@ void NineChessWindow::on_actionAutoRun_A_toggled(bool arg1)
         // 自动运行前禁用控件
         ui.dockWidget->setEnabled(false);
         ui.gameView->setEnabled(false);
-        // 启动定时器
-        autoRunTimer.start(game->getDurationTime() + 50);
+        // 启动定时器；间隔=动画时长+50ms余量，但至少0.5秒走一步：
+        // 取消"落子动画"时动画时长为0，不设下限就只有50ms一步，快得看不清
+        const int minAutoRunIntervalMS = 500;
+        autoRunTimer.start(qMax(minAutoRunIntervalMS, game->getDurationTime() + 50));
     }
     else {
         // 关闭定时器
@@ -697,18 +738,18 @@ void NineChessWindow::on_actionEngine_E_triggered()
     groupBox1->setTitle(tr("玩家1 AI设置"));
     label_depth1->setText(tr("深度"));
     spinBox_depth1->setMinimum(1);
-    spinBox_depth1->setMaximum(10);
-    label_time1->setText(tr("限时"));
+    spinBox_depth1->setMaximum(20);
+    label_time1->setText(tr("限时(秒)"));
     spinBox_time1->setMinimum(1);
-    spinBox_time1->setMaximum(30);
+    spinBox_time1->setMaximum(60);
 
     groupBox2->setTitle(tr("玩家2 AI设置"));
     label_depth2->setText(tr("深度"));
     spinBox_depth2->setMinimum(1);
-    spinBox_depth2->setMaximum(10);
-    label_time2->setText(tr("限时"));
+    spinBox_depth2->setMaximum(20);
+    label_time2->setText(tr("限时(秒)"));
     spinBox_time2->setMinimum(1);
-    spinBox_time2->setMaximum(30);
+    spinBox_time2->setMaximum(60);
 
     buttonBox->setStandardButtons(QDialogButtonBox::Cancel | QDialogButtonBox::Ok);
     buttonBox->setCenterButtons(true);

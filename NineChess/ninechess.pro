@@ -47,7 +47,6 @@ HEADERS  += \
     src/ninechess_symmetry.h \
     src/ninechesswindow.h \
     src/pieceitem.h \
-    src/manuallistview.h \
     src/aithread.h
 FORMS    += \
     ninechesswindow.ui

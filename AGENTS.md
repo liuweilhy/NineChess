@@ -48,6 +48,6 @@
 
 ## Build Notes
 
-- The GUI project currently uses Qt 5.15.2 (`msvc2019_64`) with MSVC toolset `v142`.
+- The GUI project currently uses Qt 5.15.2 (`msvc2019_64`) with MSVC toolset `v143` (VS2022; switched from `v142` in 2026-09).
 - `D:\My program\QT\NineChess\NineChess\ninechess.pro` is kept in sync with the MSBuild project for source lists and `/utf-8`.
 - For quick model sanity checks, prefer `NineChessConsole` before changing GUI behavior.

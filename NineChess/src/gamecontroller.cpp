@@ -868,6 +868,12 @@ void GameController::setEngine1(bool arg)
 {
     isEngine1 = arg;
     if (arg) {
+        // 未开局时勾选先手AI：自动开局，由AI自己走第一手。
+        // 未开局阶段轮到NOBODY，AI线程的回合判定永远不成立而一直休眠，
+        // 此前只能靠人先点棋盘触发actionPiece里的开局，等于替AI代劳第一手
+        if (chess.getPhase() == NineChess::GAME_NOTSTARTED) {
+            gameStart();
+        }
         ai1.setAi(chess);
         if (ai1.isRunning())
             ai1.resume();

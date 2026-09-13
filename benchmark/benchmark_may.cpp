@@ -9,7 +9,7 @@
 ** 赛制：每步 10 秒强制出招；100 条走子命令未分胜负判和；奇偶局交替执先。
 ** 两版模型同为 0-based 位棋盘实现，命令流直接互通，无需坐标转换。
 **
-** 用法: AIBenchmarkMay.exe [起始规则] [结束规则] [每规则局数] [5月深度] [新深度] [限时ms] [新线程数]
+** 用法: AIBenchmarkMay.exe [起始规则] [结束规则] [每规则局数] [5月深度] [新深度] [限时ms] [新线程数] [纯最优0/1] [wp] [pv] [判和步数,默认100]
 ****************************************************************************/
 
 #include <windows.h>
@@ -46,10 +46,9 @@ int g_pureBest = 0;
 int g_winPressure = -1;   // -1 = 引擎默认 150
 int g_pointValue = -1;    // -1 = 引擎默认 16
 
-// 非 pureBest 时新引擎使用的随机配置。此处与 describeNewEngineConfig() 共用，
-// 避免两处各自写死数字而再次出现"标签与实际不符"。
-constexpr int kRandomGap = 30;
-constexpr int kRandomPlies = 10;
+// 非 pureBest 时新引擎随机参数不在驱动里赋值：randomness/randomGap/randomPlies
+// 全部保留引擎头文件当前默认（2026-09-14 起为 rP10+g24 闭区间）。驱动写死数字
+// 曾在引擎默认变更后造成"标签与实际不符"（evalab 错标教训），故配置只从引擎读。
 
 FILE* g_verboseLog = nullptr;
 
@@ -60,9 +59,12 @@ string describeNewEngineConfig()
 {
     const string wp = g_winPressure >= 0 ? std::to_string(g_winPressure) : string("默认150");
     const string pv = g_pointValue >= 0 ? std::to_string(g_pointValue) : string("默认16");
-    const string rnd = g_pureBest
-        ? string("关")
-        : "rP" + std::to_string(kRandomPlies) + "+g" + std::to_string(kRandomGap);
+    string rnd = "关";
+    if (!g_pureBest) {
+        NineChess_AI_AB::SearchOptions def;
+        rnd = "引擎默认(rP" + std::to_string(def.randomPlies)
+            + "+g" + std::to_string(def.randomGap) + ")";
+    }
     return "随机=" + rnd + " wp=" + wp + " pv=" + pv;
 }
 
@@ -293,14 +295,10 @@ GameReport playOneGame(int rule, int game, bool mayIsPlayer1,
     options.timeLimitMs = timeLimitMs;
     options.threads = (uint32_t)newThreads;
     // A/B 开关由命令行注入（g_pureBest / g_winPressure / g_pointValue），
-    // 用于隔离 randomPlies 与新增评估项的强弱影响
+    // 用于隔离 randomPlies 与新增评估项的强弱影响。
+    // 非 pureBest 时随机三参数一律不赋值，保留引擎头文件默认（见文件头部说明）。
     if (g_pureBest)
         options.randomness = 0;
-    else {
-        options.randomness = 1;
-        options.randomGap = kRandomGap;
-        options.randomPlies = kRandomPlies;
-    }
     // wp < 0 必须"不赋值"才能保留引擎默认 150：SearchOptions::winPressureWeight
     // 没有 -1 哨兵语义（不像 stalematePressure/forkThreat/millSafety 由
     // refreshWeights 用 >=0 判断取默认），直接把 -1 写进去会让该项以 -1 参与估值。

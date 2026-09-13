@@ -4,8 +4,8 @@
 
 AiThread::AiThread(int id, QObject *parent) : QThread(parent),
     waiting_(false),
-    aiDepth(8),
-    aiTime(10)
+    aiDepth(10),
+    aiTime(5)
 {
     this->id = id;
     // 每手棋的时间预算直接交给 AI 原生的时间控制（SearchOptions::timeLimitMs），

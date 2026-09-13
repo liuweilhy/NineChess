@@ -36,7 +36,8 @@ alphaBetaPruning(depth)
 - 置换表键每节点只计算一次，probe/store 共用；键在 `makeSearchHash()` 出口统一过一次 `mix64`
   雪崩（lite 哈希的稠密位展开未混合时低 18 位只取决于前几个点位，直接索引曾致节点数涨 3 倍）。
 - `SearchContext` 每线程一份（工作局面 + 杀手/历史/统计 + 真实历史轨迹）；
-  类成员只保留只读共享数据（根局面、对称表、停止标志、时间预算），多线程安全。
+  类成员只保留只读共享数据（根局面、对称表、停止标志、时间预算）加一份
+  分片加锁的置换表（`m_tt`，实例私有、堆持有），多线程安全。
 
 ### 1.3 静默搜索（`quiescenceSearch`，默认开）
 
@@ -81,8 +82,13 @@ alphaBetaPruning(depth)
 
 ### 1.5 置换表（`TTStore`）
 
-- 按规则分 4 个全局实例：**定长桶数组**（256 分片 × 2048 桶 × 2 槽 = **1M 条**），分片互斥锁；
-  无堆分配、无满表全量扫描清理（旧 `unordered_map` 方案的 O(n log n) 打嗝已废弃）。
+- 每个 AI 实例一张私有表（2026-09 起改为实例持有，原"按规则分 4 个全局实例"的
+  跨实例共享已移除：先手/后手各持一个 AI 实例即按先后手天然分表互不共享，
+  A/B 两臂 / 自对弈双方不再经置换表互通知识，两侧评估配置不同也不会串味；
+  同一实例一次搜索内的全部 Lazy SMP 线程仍共用这一份）：
+  **定长桶数组**（256 分片 × 2048 桶 × 2 槽 = **1M 条**），分片互斥锁；
+  表体一次性堆分配（`unique_ptr`，16MB 不内联进对象以免栈上实例爆栈），
+  节点级无堆分配、无满表全量扫描清理（旧 `unordered_map` 方案的 O(n log n) 打嗝已废弃）。
 - 槽位 16 字节：`key(8) + metaA(4) + metaB(4)`，每桶 2 槽恰好 32 字节对齐缓存行。
   metaA = value(16) | flag(2) | moveType(2) | from(5) | to(5)，metaB = depth(8) | generation(16)；
   from/to 存"值+1"与 `Move::from = -1` 语义区分（2026-09 由 24 字节逐字段布局压缩而来，
@@ -147,8 +153,9 @@ alphaBetaPruning(depth)
   逐子加分。自对弈 60 局 8:2 压制关闭方（证明自洽）；**对外** 80 局/臂对照 wp=150 vs wp=0
   仅差 3 胜，小于同配置重跑噪声 ±5 胜（2026-09-12 重测，见 `benchmark/results/evalab_*/CORRECTION.md`）
   ——对外强度效应未证实。
-- 点位结构价值（`pointValueWeight`，默认 16）：双方占据点位的穿线数总和之差 × 权重，
-  引导占据穿线更多的点（边中点 > 角点，斜线规则角点更优）。对外 A/B 同样在噪声内。
+- 点位结构价值（`pointValueWeight`，默认 16）：双方占据点位的穿线数总和之差 × 权重。
+  线表实测（EvalProbe）：直线规则（0/2/3）每点恒 2 条线、**该项差值恒 0（失效）**；
+  仅斜线规则（1 打三棋）生效——角点 3 线 > 边中点 2 线，引导占角。对外 A/B 同样在噪声内。
 - 被闷杀压力（权重表 `stalematePressure`，默认 0）：中局对手机动性 ≤3 时每少一步加分
   （blockedIsLoss 规则收益最大）。
 - 双三连威胁（权重表 `forkThreat`，默认 0）：活二"成三点"去重计数，≥2 时每多 1 点加一份。
@@ -166,6 +173,43 @@ alphaBetaPruning(depth)
   交替执先），结束与原始行做终局验证并打印可回贴的权重行。三轮战役（8/16/24 局每候选，
   终局验证 46%/53%/51%）均不显著——原始权重行守擂成功；深度 8 下对局约九成平局，
   单局信息量低，进一步调参收益需要海量对局（SPSA 式）或更强的评估项。
+
+#### 1.8.1 逐项计分标准表（先手视角，默认权重，全部经 EvalProbe 实测核对）
+
+计分方向与阶段约定：
+
+- 评估值是**先手（PLAYER1）视角**：正分利好先手、负分利好后手；搜索层按轮走方换号
+  （`maximizing = turn == PLAYER1`）。因此下表"每单位 ±N"的读法是：先手多一个单位 +N，
+  后手多一个单位 −N（差值项，先手计数 − 后手计数）。
+- 阶段权重默认**硬切换**：未开局/摆子阶段用"开局"列，走子阶段用"中局"列；
+  `taperedEval` 开启时按剩余手牌比例在两列间线性插值（phaseT ∈ [0,256]）。
+- 表中"±N"表示该项作用在双方差值上；标"不参与"的项在该阶段恒为 0。
+
+| # | 计分项 | 每单位计分 | 开局 | 中局 | 口径与开关 |
+|---|---|---|---|---|---|
+| 1 | 在盘子差 | 每净多 1 颗在盘棋子 | ±120 | ±180 | blend 参与项 |
+| 2 | 手牌差 | 每净多 1 颗未落子 | ±48 | 不参与 | 恒用开局权重（无中局列、不插值） |
+| 3 | 可提三连差 | 每个站立且可再提的三连 | ±96 | ±112 | 可提 = 站立三连且（规则允许重复提子 或 该键未登记历史）。**规则 2（九连棋）三连成形瞬间即登记历史，站立三连永远不再计入 → 该项结构性恒 0**（55,060 个评估状态实测 0 命中）；规则 0/1/3 正常生效 |
+| 4 | 活二差 | 每条"己方 2 子 + 线内唯一空位" | ±24 | ±32 | 按线计数（共点双活二各计 1 条）；威胁点去重只用于第 10 项 |
+| 5 | 机动性差 | 每步可用走法 | 不参与 | ±10 | 仅中局；飞子方 = 在盘子数 × 空位数；提子待提时轮走方 = 待提子数 |
+| 6 | 提子待提 | 轮走方每待提 1 子 | ±160 | ±220 | 记在轮走方（必为提子方）；多提规则（1/2）一步可欠多子；blend 参与项 |
+| 7 | 点位结构价值 | 每点价值 = 该点穿线数，总和差 ×16 | 两阶段同权 | 同左 | 直线规则（0/2/3）每点恒 2 线 → 差恒 0 失效；仅打三棋生效（角点 3 线 > 边中点 2 线）；`pointValueWeight` = 0 关 |
+| 8 | 胜利临近压力 | 对手总数（在盘+手牌）≤ 判负线+2 时每逼近 1 子 | ±150 | ±150 | `winPressureWeight` = 0 关；阈值 = `minPiecesToSurvive`+2 = 5；单个对手最多贡献 (5−3+1)×150 = 450 |
+| 9 | 被闷杀压力 | 中局对手机动性 ≤3 时每少 1 步 | 不参与 | ±(4−机动性)×权重 | 权重表 `stalematePressure`，默认 0 休眠；双方对称（己方低机动对称扣分） |
+| 10 | 双三连威胁 | 互不相同成三点 ≥2 时每多 1 点 | 两阶段同权 | 同左 | 权重表 `forkThreat`，默认 0 休眠；A/B 实测 ft=80 偏负 |
+| 11 | 三连保护 | 处于己方三连中的棋子数差每子 | 两阶段同权 | 同左 | 权重表 `millSafety`，默认 0 休眠 |
+| 12 | 步数急迫分 | 子力领先方每子每步 | +8 | +8 | `stepsRemainingHint` > 0（限步赛制控制层传入）才启用；剩余 <24 步；领先封顶 ±3 子；最大 ≈ 3×23×8 = 552 |
+| 13 | 终局 | 胜 +(30000−ply)、负 −(30000−ply)、和 0 | — | — | 评估出口 `clampScore` 到 ±(30000−ply)：估值永不掩盖杀分 |
+
+算例（EvalProbe 场景 S2，规则 0 摆子阶段：先手 (0,7)(0,0)(0,1) 成三待提 1 子，
+后手 (1,3)(2,4)）：在盘差 +1×120 + 手牌差 −1×48 + 可提三连 +1×96 + 提子待提 +1×160
++ 点位价值 (6−4)×16 = 32 → **+360**。
+
+与规则的耦合：权重表四行当前同值，规则差异由结构参数进入评估——打三棋 20 条线
+（斜线扩大三连/活二扫描集、点位价值生效）、九连棋可提三连口径（历史登记，见第 3 项）、
+莫里斯飞子改变机动性量纲（第 5 项）、判负线影响压力阈值（第 8 项）。
+核对工具：`benchmark/evalprobe.cpp` → `bin\EvalProbe.exe`（独立按本表重算，
+与引擎 depth-0 静态评估在随机对局全程逐手比对，四组选项配置 × 15.5 万状态一致）。
 
 ### 1.9 走法排序（`orderMoves` / 静态启发）
 
@@ -185,7 +229,8 @@ alphaBetaPruning(depth)
 
 ### 1.10 多线程（Lazy SMP）
 
-N 线程各自独立跑同一套迭代加深，共享分片置换表。实测 NPS 扩展性：4 线程约 3.7 倍、
+N 线程各自独立跑同一套迭代加深，共享本实例的分片置换表（实例之间按先后手分表，
+互不共享）。实测 NPS 扩展性：4 线程约 3.7 倍、
 8 线程约 6.3 倍、16 线程约 8.8 倍。默认线程数由 `defaultThreadCount()` 推导
 （≥5 核留 2 核、≤4 核留 1 核、封顶 16，查询失败保守 4）。
 **对局实测**：每步 0.1 秒级完成的搜索，8 线程对 1 线程的强度收益基本不体现
@@ -204,7 +249,7 @@ N 线程各自独立跑同一套迭代加深，共享分片置换表。实测 NP
 
 | 参数 | 类型 | 默认值 | 取值范围 | 作用域 | 作用 | 备注 |
 |---|---|---|---|---|---|---|
-| `depth`（`alphaBetaPruning` 入参） | int | Console 8 / GUI 按界面设置 | 1~127（`kMaxPly=128` 封顶） | 每次搜索 | 迭代加深的目标深度 | `dynamicDepth` 开时中局再 +2；搜索到请求深度即止，**限时模式下 depth 同样是终点而非保底（timeLimitMs 只是超时中断上限，见 §1.1；2026-09-13 回退“用满预算放开深度”的实验）** |
+| `depth`（`alphaBetaPruning` 入参） | int | Console 8 / GUI 默认 10（`AiThread` 构造值） | 1~63（`kMaxPly=64`，入参钳到 `kMaxPly-1`） | 每次搜索 | 迭代加深的目标深度 | `dynamicDepth` 开时中局再 +2；搜索到请求深度即止，**限时模式下 depth 同样是终点而非保底（timeLimitMs 只是超时中断上限，见 §1.1；2026-09-13 回退“用满预算放开深度”的实验）** |
 | `timeLimitMs` | int64 | 0 | 0 = 不限时；>0 = 预算 | 每次搜索 | 超时中断上限；中断保留上层完整结果 | GUI 恒用（秒×1000，`AiThread`）；Console `search` 默认 0。限时不再被占满：到请求深度即提前出招 |
 | `threads` | uint32 | `defaultThreadCount()`（自动） | 1~16（建议）；Console `th=0` 表自动 | 每次搜索 | Lazy SMP 并行，共享分片 TT | 0.1s 级搜索多线程收益基本不体现，短时限宜 1~4 |
 | `hashMode` | HashMode 枚举 | `OpeningCanonical`(1) | 0=Plain / 1=仅开局 canonical / 2=全 canonical | 每次搜索 | 对称等价局面共享 TT 条目 | 2 是旧行为（中局每节点慢约 4 倍）；1 为默认 |
@@ -228,7 +273,7 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
 | 参数 | 类型 | 默认值 | 取值范围 | 作用域 | 作用 | 备注 |
 |---|---|---|---|---|---|---|
 | `randomness` | uint32 | **1（默认开）** | 0 = 纯最优；>0 = 启用 | 每次搜索 | 根节点精确打分 + 分差阈值 + softmax 加权选着 | **数值大小无区别，引擎只判断 >0**（2026-09-13 起默认开）。对外实测有代价：随机 23 胜 vs 纯最优 25~29 胜（80 局/臂，2026-09） |
-| `randomGap` | int32 | **30** | ≥0（估值单位） | 每次搜索 | 随机候选与最优的分差阈值 | 2026-09-13 由 60 收窄至 30；带宽大小在噪声范围内，“开不开”才是决定性的 |
+| `randomGap` | int32 | **16** | ≥0（估值单位） | 每次搜索 | 随机候选与最优的分差阈值（闭区间：分差 ≤ gap 入选） | 2026-09-13 由 60 收窄至 30，2026-09-14 先收窄至 24（当日的 5s80 复测即用此值）、再收窄至 **16**，并把筛选从"分差 < gap"修为注释承诺的"分差 ≤ gap"（分差恰等于阈值的招法不再被漏掉）；同日修复后手根缺陷：候选窗口与 softmax 原按 P1 固定视角写死，后手执根时窗口形同虚设且权重反向（随机窗口内主动选劣招）；带宽大小在噪声范围内，"开不开"才是决定性的 |
 | `randomPlies` | int32 | **10** | 0 = 全程随机；>0 = 仅前 N 条命令 | 每次搜索（按根局面命令数） | 开局随机、之后恢复纯最优 | 2026-09-13 由 0（全程）改为 10；0 = 与旧版全程随机行为一致 |
 | `seed` | uint64 | 0 | 任意；0 = 每次随机 | 每个根局面 | 固定种子可复现对局 | `vs` 每局用 `seed + g*2 + 1` |
 
@@ -237,10 +282,11 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
 备注 2：随机是对局属性不是搜索属性——引擎返回带分数的根走法列表后，多样性应由
 控制层实现（§6 方向 5）。
 备注 3：默认值变更（2026-09-13）的生效范围——GUI `AiThread` 不显式设置随机参数，
-直接继承引擎默认（现为开局 10 步内随机、gap 30）；Console 各命令**显式传值**：
-`search` 默认 `random=0`（保持确定性测试路径）、`match`/`vs`/`booktrain` 固定
-`randomness=1, gap=60`，但都不设置 `randomPlies`（继承默认，由全程随机变为
-前 10 步）。
+直接继承引擎默认（现为开局 10 步内随机、gap 16、候选取分差 ≤ gap 的闭区间）；Console 各命令**显式传值**：
+`search` 默认 `random=0`（保持确定性测试路径）、`match`/`vs`/`booktrain`/`tune` 固定
+`randomness=1, gap=16`，但都不设置 `randomPlies`（继承默认，由全程随机变为
+前 10 步）。注意：2026-09-14 之前的对局数据中，后手在随机窗口内的选招受上述
+后手根缺陷影响（系统性偏劣），跨版本对比强度数据时需计入。
 
 ### 2.4 评估项（SearchOptions 层）
 
@@ -289,22 +335,22 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
 
 | 常量 | 值 | 位置 | 含义 |
 |---|---|---|---|
-| `kMaxPly` | 128 | `ninechess_ai_ab.h:333` | 搜索/迭代层数天花板 |
-| `kRepetitionMaxPly` | 10 | `ninechess_ai_ab.h:337` | 重复惩罚生效层窗口 |
-| `kMaxQuiescenceDepth` | 12 | `ninechess_ai_ab.h:340` | 静默搜索深度上限 |
-| TT 几何 | 256 分片 × 2048 桶 × 2 槽 = 1M 条，槽 16B/桶 32B | `ninechess_ai_ab.h:263` | 容量与布局固定 |
-| 胜负分 ply 换算 | \|value\| > `WIN_SCORE - kMaxPly`(29872) 时入库 +ply / 命中 −ply | `probe/storeTransposition` | mate 距离的 TT 相对化 |
+| `kMaxPly` | 64 | `ninechess_ai_ab.h:336` | 搜索/迭代层数天花板 |
+| `kRepetitionMaxPly` | 10 | `ninechess_ai_ab.h:340` | 重复惩罚生效层窗口 |
+| `kMaxQuiescenceDepth` | 12 | `ninechess_ai_ab.h:343` | 静默搜索深度上限 |
+| TT 几何 | 256 分片 × 2048 桶 × 2 槽 = 1M 条，槽 16B/桶 32B | `ninechess_ai_ab.h:265` | 容量与布局固定 |
+| 胜负分 ply 换算 | \|value\| > `WIN_SCORE - kMaxPly`(29936) 时入库 +ply / 命中 −ply | `probe/storeTransposition` | mate 距离的 TT 相对化 |
 | 浅层剪枝裕度 | RFC：depth1=400 / depth2=700；futility：depth1=400 | `search` | 见 §1.4；守卫：提子不剪、机动性 ≤2 不剪、打三棋开局末期不剪 |
 | blend 分度 | 256 | `ninechess_ai_ab.cpp` | 开/中局权重插值精度；参与插值的项（material/mill/openMill/capture）固定 |
 | 胜负分 | ±30000（按 ply 衰减），边界 ±32000 | `evaluate` | mate 距离编码 |
 | 排序启发 | 成三 2400 / 活二 240 / 阻断 180 / 线数 48 / 拆三 −160；提子 3000/128/64/32；TT 4M / 杀手 3M / 历史 ≤0.5M（根节点无加成） | `orderKey` | 静态启发量值；根置顶已于 2026-09-13 移除 |
-| wp 触发线 | 对手总子数 ≤ `minPiecesToSurvive + 2` | `ninechess_ai_ab.cpp:1025` | 胜利临近压力起点 |
+| wp 触发线 | 对手总子数 ≤ `minPiecesToSurvive + 2` | `ninechess_ai_ab.cpp:1124` | 胜利临近压力起点 |
 | 急迫分 | 每子每步 +8、剩余 <24 步、领先封顶 3 子 | `evaluate` | `stepsRemainingHint` 启用后的量值 |
 | 默认线程数 | ≥5 核留 2、≤4 核留 1、封顶 16、失败保守 4 | `defaultThreadCount()` | 可显式传 `threads` 覆盖 |
-| LMR 阈值 | depth≥3、i≥4、order<2400、减 1+(d≥6)+(i≥12)、上限 depth−2 | `ninechess_ai_ab.cpp:736` | 见 §1.4 |
-| 延伸条件 | depth ≤ 2 的强制提子节点 | `ninechess_ai_ab.cpp:728` | 见 §1.4 |
+| LMR 阈值 | depth≥3、i≥4、order<2400、减 1+(d≥6)+(i≥12)、上限 depth−2 | `ninechess_ai_ab.cpp:820` | 见 §1.4 |
+| 延伸条件 | depth ≤ 2 的强制提子节点 | `ninechess_ai_ab.cpp:812` | 见 §1.4 |
 | Aspiration | depth≥3、Δ=300、失败 ×3 | `ninechess_ai_ab.cpp:356` | 见 §1.4 |
-| dynamicDepth | 中局 +2 | `ninechess_ai_ab.cpp:258` | 见 §1.4 |
+| dynamicDepth | 中局 +2 | `ninechess_ai_ab.cpp:259` | 见 §1.4 |
 | 增量哈希校验 | 每 2048 节点全量比对 | `SearchContext` | 见 §1.6 |
 
 ## 3. 关闭/默认语义对照（易错点汇总）
@@ -336,7 +382,7 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
 |---|---|---|
 | `search` | `[depth=8] [timeMs=0] [hash=1] [random=0] [gap=60] [threads=0] [seed=0] [pv=16] [asp=1] [rep=40] [q=0] [dd=1] [pvs=0] [ext=1] [lmr=1]` | 单局面搜索，打印最佳走法/估值/深度/耗时/节点/NPS/TT/重复命中/根走法分数。**注意 `q`、`pvs` 命令默认与引擎默认（开）不一致** |
 | `match` | `[n=20] [d=8] [h=1] [r=1] [th=0] [s=0] [mp=300] [dd=1]` | 同配置自对弈 n 局；`r=1` 默认开随机保证对局有变化；`mp` 限步（0=不限）自动传 `stepsRemainingHint` |
-| `vs` | `[n=20] [d1=6] [h1=1] [pv1=16] [d2=8] [h2=1] [pv2=16] [s=0] [a=1] [rep=40] [wp=0] [sp=-1] [ft=-1] [th=0] [ext=-1] [lmr=-1] [ms=-1] [tp=-1] [sr=0]` | 强度 A/B，奇偶局交替执先。`asp`/`rep` 双方同值；**`wp`/`sp`/`ft`/`ext`/`lmr`/`ms`/`tp`/`sr` 只作用于引擎 2**；引擎 1 恒 `wp=0` 且双方固定 `randomness=1, gap=60`（与引擎默认 150 不同，注意解读） |
+| `vs` | `[n=20] [d1=6] [h1=1] [pv1=16] [d2=8] [h2=1] [pv2=16] [s=0] [a=1] [rep=40] [wp=0] [sp=-1] [ft=-1] [th=0] [ext=-1] [lmr=-1] [ms=-1] [tp=-1] [sr=0]` | 强度 A/B，奇偶局交替执先。`asp`/`rep` 双方同值；**`wp`/`sp`/`ft`/`ext`/`lmr`/`ms`/`tp`/`sr` 只作用于引擎 2**；引擎 1 恒 `wp=0` 且双方固定 `randomness=1, gap=16`（wp=0 与引擎默认 150 不同，注意解读） |
 | `tune` | `[n=20] [d=6] [s=0] [r=1] [th=0自动]` | 按规则坐标下降自动调参（§2.5 的 12 列），终局验证 + 打印可回贴权重行 |
 | `selfcheck` | `[n] [d]` | 4 规则随机自对弈并逐节点校验增量哈希 |
 | `booktrain` | `[局数] [深度] [种子]` | 自对弈生成开局库（开局库是独立组件，总则见 `AI_SUMMARY.md` §15） |
@@ -344,14 +390,22 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
 ### 4.3 GUI（`AiThread` / `GameController`）
 
 - 每步时限换算为 `timeLimitMs = 秒 × 1000`（AI 原生时间控制，无外部 QTimer 强杀）；
-- 深度与每步秒数经界面设置传入；`stepsRemainingHint` 由限步赛制经
+- 深度与每步秒数经界面设置传入：`AiThread` 构造默认**深度 10、每步 5 秒**（2026-09-14 起，
+  此前 8 层/10 秒），设置对话框深度 1~20、限时 1~60 秒；
+  `stepsRemainingHint` 由限步赛制经
   `AiThread::setStepsLimit()` 接线；其余 `SearchOptions` 一律用引擎默认。
 
 ### 4.4 benchmark 驱动（`benchmark/benchmark_may.cpp` 等）
 
 命令行尾部注入 `pureBest`/`wp`/`pv` 三开关做评估项隔离（`wp≥0` 才赋值，`wp=-1` = 保留
 默认 150——2026-09-12 修复；此前 `-1` 被字面写入致三臂实验作废，详见
-`benchmark/results/evalab_*/CORRECTION.md`）。
+`benchmark/results/evalab_*/CORRECTION.md`）。2026-09-14 起新引擎的随机三参数
+（randomness/randomGap/randomPlies）在非 pureBest 时**一律不写入、保留引擎头文件当前默认**，
+配置标签从默认构造的 `SearchOptions` 现读，杜绝引擎默认变更后再现"标签与实际不符"。
+
+另有自对弈驱动 `benchmark/benchmark_self.cpp`（`build_self.bat` → `bin\AIBenchmarkSelf.exe`）：
+单一权威模型 + 两侧独立 AI 实例（独立置换表/种子），随机与评估参数全用引擎默认，
+用于先后手胜率/和棋率测量（见 `benchmark/results/selfplay_r0_5s80/REPORT.md`）。
 
 ## 5. A/B 实验方法学（教训）
 
@@ -380,6 +434,8 @@ bool 开关均为"量值写死、只能开/关"，内部阈值见备注（详见
    引擎变为纯确定性强度组件。
 6. 残局库（3v3 全量 WDL 约 8MB 可行）与 NNUE 式小网络为长期方向；
    短时限下多线程收益有限（§1.10），可考虑短时限自动降线程。
+   **2026-09-14 决策**：开局库与残局库均未完全实现，而当前默认配置的算法强度已经足够
+   （对 2018版/5月版均取得决定性优势），两者**暂时搁置不启用**（总则见 `AI_SUMMARY.md` §15）。
 7. 参数面收敛（已完成：`ttMaxEntries` 死字段已删除、浅层剪枝落为写死阈值；
    候选：sp/ft/ms 三个覆盖字段与 `useCustomWeights` 冗余、bool 开关验证后硬编码、
    wp/pv 迁入 `EvalWeights` 成为 tune 可调列——均以 §5 方法学验证为前提）。
@@ -404,9 +460,9 @@ setChess 剥离命令历史；增量普通哈希 + selfcheck 校验；开局库�
 
 | 目标 | 文件 | 关键函数/位置 |
 |---|---|---|
-| 搜索入口/配置 | `ninechess_ai_ab.h` | `SearchOptions`(:67) / `EvalWeights`(:46) / `alphaBetaPruning` |
+| 搜索入口/配置 | `ninechess_ai_ab.h` | `SearchOptions`(:68) / `EvalWeights`(:47) / `alphaBetaPruning` |
 | 主搜索 | `ninechess_ai_ab.cpp` | `alphaBetaPruning / searchRoot / search / quiescence` |
-| 置换表 | `ninechess_ai_ab.cpp` | `probeTransposition / storeTransposition / TTStore`(:263) |
+| 置换表 | `ninechess_ai_ab.cpp` | `probeTransposition / storeTransposition / TTStore`(:265) |
 | 对称哈希 | `ninechess_symmetry.h/.cpp` | `canonicalHash / viewHash / build`（AI 与开局库共用） |
 | 估值 | `ninechess_ai_ab.cpp` | `evaluate / evaluateTerminal / countMillsBothSides` |
 | 走法排序 | `ninechess_ai_ab.cpp` | `orderMoves / orderKey / scorePlaceOrShiftMove / scoreCaptureMove` |

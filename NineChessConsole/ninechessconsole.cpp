@@ -527,7 +527,7 @@ void runMatchCommand(const std::string& argText, NineChess& chess)
         NineChess_AI_AB::SearchOptions options;
         options.timeLimitMs = 0;
         options.randomness = static_cast<uint32_t>(randomLevel);
-        options.randomGap = 60;
+        options.randomGap = 16;
         // threads <= 0 表示自动：按 CPU 逻辑核心数取默认值。
         options.threads = threads > 0
             ? static_cast<uint32_t>(threads)
@@ -696,7 +696,7 @@ void runVsCommand(const std::string& argText, NineChess& chess)
         NineChess_AI_AB::SearchOptions options;
         options.timeLimitMs = 0;
         options.randomness = 1;   // 双方都启用随机，保证对局有变化
-        options.randomGap = 60;
+        options.randomGap = 16;
         // 双方同线程数保持公平；同深度对抗下共享置换表的反馈是对称的。
         // 注意：深度不对称的 A/B（如 5v7）建议 th=1，避免跨引擎 TT 反馈不对称。
         options.threads = th > 0
@@ -847,7 +847,7 @@ void runBookTrainCommand(const std::string& argText, NineChess& chess)
     NineChess_AI_AB::SearchOptions options;
     options.timeLimitMs = 0;
     options.randomness = 1;   // 训练必须开随机，才能覆盖不同开局分支
-    options.randomGap = 60;
+    options.randomGap = 16;
     options.threads = 1;
     options.seed = static_cast<uint64_t>(seed);
 
@@ -1045,7 +1045,7 @@ double playTuneMatch(uint32_t ruleIndex, const NineChess_AI_AB::EvalWeights& bas
         NineChess_AI_AB::SearchOptions options;
         options.timeLimitMs = 0;
         options.randomness = 1;
-        options.randomGap = 60;
+        options.randomGap = 16;
         options.threads = threads;
         options.dynamicDepth = false;
         options.useCustomWeights = true;

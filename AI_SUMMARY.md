@@ -135,7 +135,7 @@ D:\My program\QT\NineChess\
 
 ## 11. 构建与编码约定
 
-- GUI 需 Qt 5.15.2（msvc2019_64）+ MSVC v142；`ninechess.pro` 与 `.vcxproj` 需同步（源文件列表、`/utf-8`）。
+- GUI 需 Qt 5.15.2（msvc2019_64）+ MSVC 工具集 v143（VS2022，2026-09-14 起，此前 v142）；`ninechess.pro` 与 `.vcxproj` 需同步（源文件列表、`/utf-8`）。
 - 所有文本文件 UTF-8 无 BOM + CRLF；`.editorconfig` / `.gitattributes` / `AGENTS.md` 是契约。
 - 命名：用 `ninechess_common.h` 的新字段名，不恢复旧别名。
 - 新增源文件需同步更新：GUI 的 `.vcxproj` + `.filters` + `.pro`，Console 的 `.vcxproj`（+ `.filters`）。
@@ -143,6 +143,9 @@ D:\My program\QT\NineChess\
 ## 12. AI 已知弱点与优化入口
 
 已整体迁入 `AI_ALPHABETA.md` §6（未完成方向按预期收益排序，已完成特性保留一览清单）。
+
+**2026-09-14 决策**：开局库与残局库均未完全实现，但当前默认配置下算法强度已经足够
+（对 2018版/5月版均取得决定性优势），两者**暂时搁置不启用**，详见 §15 与 `AI_ALPHABETA.md` §6。
 
 ## 13. Console 新增命令（AI 调试）
 
@@ -168,6 +171,12 @@ D:\My program\QT\NineChess\
 | 白盒测试 | tests/rule_harness.cpp | `runRule0..3/setupMidgame/setupOpeningCapture` |
 | 对局电池 | tests/Run-MatchBattery.ps1 | 批量 vs 对抗（书开关/深度差/pv） |
 ## 15. 开局库（`ninechess_book.*`）
+
+> **当前状态（2026-09-14）**：开局库与残局库均**未完全实现**——开局库只有统计式原型
+> （Console `booktrain`/`bookon` 可用，GUI 未接线），残局库尚无实现。在当前默认配置下
+> 搜索算法强度已经足够（对 2018版/5月版取得决定性优势，见 `benchmark/results/`），
+> 因此两者**暂时搁置不启用**；残局库（3v3 WDL）与评估调参仍是长期方向
+> （`AI_ALPHABETA.md` §6）。以下为开局库原型的设计说明，供将来续作参考。
 
 - **数据来源**：`booktrain <局数> <深度> [种子]` 自对弈（无书、开随机），对前 `bookDepth`（默认 10）层每个局面按"轮到方"视角累加胜负分（胜 +1 / 和 0 / 负 -1）；可多次运行累积样本，即"多轮对局的统计结果做评分调整"。
 - **按规则独立**：每规则一个书文件 `books/book_<规则号>.dat`，规则切换自动加载对应书；跨规则文件加载被拒绝（评分不可通用）。

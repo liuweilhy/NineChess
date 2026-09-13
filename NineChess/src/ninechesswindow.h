@@ -21,6 +21,7 @@ public:
 protected:
     bool eventFilter(QObject * watched, QEvent * event);
     void closeEvent(QCloseEvent *event);
+    void showEvent(QShowEvent *event);
 
 private slots:
     // 初始化
@@ -83,5 +84,9 @@ private:
     QFile file;
     // 定时器
     QTimer autoRunTimer;
+    // 首次显示前用最大宽度钳住棋谱列表的sizeHint（决定停靠栏初始宽度），显示后解除
+    bool listWidthClamped = true;
+    // 棋谱模型新插入行尚未写入数据的标志（追加招法后自动选中最后一行用）
+    bool newManualRow = false;
 };
 

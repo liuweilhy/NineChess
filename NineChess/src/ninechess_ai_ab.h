@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <string>
@@ -70,8 +71,9 @@ public:
         uint32_t randomness = 1;    // 根节点随机开关：0 = 纯最优；>0 = 启用。
                                      // 数值大小无区别（引擎只判断 >0），
                                      // 习惯取 1；彻底关闭请置 0。
-        int32_t randomGap = 30;    // 随机候选集与最优的分差阈值（估值单位）；
-                                     // 分差超过该值的走法不进入随机候选。
+        int32_t randomGap = 16;    // 随机候选集与最优的分差阈值（估值单位）；
+                                   // 分差 ≤ 该值的走法进入随机候选（2026-09-14 起为闭区间，
+                                   // 旧实现为严格小于，分差恰等于阈值的招法曾被漏掉）。
         int32_t randomPlies = 10;  // 仅根局面已走命令数 < N 时启用根随机，之后恢复纯最优；
                                     // 0 = 不限制（全程随机，行为与旧版一致）。开局对称
                                     // 等价着法多、随机损失小；中残局每一手都关键。
@@ -160,7 +162,7 @@ public:
     int getLastCompletedValue() const { return m_lastCompletedValue; }
     int64_t getLastSearchTimeMs() const { return m_lastSearchTimeMs; }
 
-    // 清空当前规则置换表（自对弈 / A/B 实验隔离用）。
+    // 清空本实例置换表（自对弈 / A/B 实验隔离用；先手/后手实例互不影响）。
     void clearTranspositionTable();
 
     // 最近一次完成迭代的根走法分数文本（每行 "命令 = 分数"）。
@@ -331,7 +333,7 @@ private:
     static constexpr int INF_SCORE = 32000;
 
     // 搜索最大深度上限，同时约束杀手走法表大小。
-    static constexpr int kMaxPly = 128;
+    static constexpr int kMaxPly = 64;
 
     // 重复检测只在浅层进行：深层节点数量巨大，逐个计算普通哈希
     // （编号规则下是 hard hash）会显著拖慢搜索，而重复主要影响浅层计划。
@@ -699,9 +701,10 @@ private:
     // 对外发布的根走法分数（命令文本由 rootScoresText 生成）。
     std::vector<std::pair<Move, int>> m_rootScores;
 
-    // 按规则分开的全局置换表：
-    // 同规则不同 AI 实例共享缓存，不同规则之间彼此隔离。
-    static std::array<TTStore, RULE_COUNT> s_ttStores;
+    // 本实例私有的置换表，堆持有（16MB 不能内联进对象，否则栈上实例爆栈）。
+    // 先手/后手各持一个 AI 实例，即天然按先后手分表互不共享；
+    // 同一实例一次搜索内的全部 Lazy SMP 线程仍共用这一份（分片加锁并发安全）。
+    std::unique_ptr<TTStore> m_tt = std::make_unique<TTStore>();
 
     // 按规则的评估权重表（定义见 ninechess_ai_ab.cpp，四行初始值相同）。
     static const EvalWeights s_evalWeightsPerRule[RULE_COUNT];

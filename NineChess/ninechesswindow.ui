@@ -456,7 +456,17 @@
           </layout>
          </item>
          <item>
-          <widget class="ManualListView" name="listView"/>
+          <widget class="QListView" name="listView">
+           <property name="maximumSize">
+            <size>
+             <width>128</width>
+             <height>16777215</height>
+            </size>
+           </property>
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+          </widget>
          </item>
         </layout>
        </widget>
@@ -870,11 +880,6 @@
    <class>GameView</class>
    <extends>QGraphicsView</extends>
    <header>gameview.h</header>
-  </customwidget>
-  <customwidget>
-   <class>ManualListView</class>
-   <extends>QListView</extends>
-   <header>manuallistview.h</header>
   </customwidget>
  </customwidgets>
  <resources>

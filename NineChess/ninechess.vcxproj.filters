@@ -113,9 +113,6 @@
     <ClInclude Include="src\graphicsconst.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <QtMoc Include="src\manuallistview.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
     <ClInclude Include="src\ninechess.h">
       <Filter>Header Files</Filter>
     </ClInclude>
