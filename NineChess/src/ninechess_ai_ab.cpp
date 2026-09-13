@@ -253,20 +253,12 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
     }
     // 动态深度：开局（摆子阶段）分支数约为中局的三倍，等深度下节点数差百倍量级，
     // 同样的深度上限会让中局搜索“瞬间结束”而开局“耗尽预算”。
-    // 中局根局面追加 2 层，把固定深度模式下的时间预算向中局倾斜；
-    // 配合时间预算使用时该值只是抬高深度天花板，实际深度仍由预算决定。
+    // 中局根局面追加 2 层，把固定深度模式下的时间预算向中局倾斜。
+    // 限时模式（timeLimitMs > 0）下同样生效：搜索到请求深度即止，
+    // 时间预算只作为超时中断的上限，不再用来放开深度上限。
+    // （2026-09-13 回退“限时放开深度到 kMaxPly-1”的旧行为。）
     if (m_options.dynamicDepth && m_root.getPhase() == GAME_MID) {
         depth = std::min(depth + 2, kMaxPly - 1);
-    }
-    // 限时模式（timeLimitMs > 0）：时间预算才是真实约束，深度上限直接放开
-    // 到 kMaxPly-1，由预算耗尽中断并保留最后一个完整迭代（迭代从 1 开始
-    // 逐层加深，请求深度天然成为保底）。实测旧实现“到请求深度即停”会让
-    // 10 秒预算只用到几十毫秒（中局深度 12 约 0.25~1 秒即完成），90% 以上
-    // 算力被白白放弃——本游戏分支数随阶段骤减，等预算可再深入 3~6 层。
-    // 纯深度模式（timeLimitMs == 0）行为不变：搜索到请求深度即止，
-    // Console 的 search/match/vs 等确定性测试路径不受影响。
-    if (m_options.timeLimitMs > 0) {
-        depth = kMaxPly - 1;
     }
     m_masterDone.store(false);
     seedRng();
@@ -1345,16 +1337,15 @@ int32_t NineChess_AI_AB::orderKey(SearchContext& ctx, const Move& move, bool isR
     const Move& ttMove, int ply) const
 {
     // 返回完整排序键：静态启发分（move.order）+ TT/杀手/历史加成。
-    // 全部加成都在 int32 范围内（根置顶 8M + TT 4M + 杀手 3M + 历史 0.5M + 静态 < 1M）。
+    // 全部加成都在 int32 范围内（TT 4M + 杀手 3M + 历史 0.5M + 静态 < 1M）。
     // 调用方（orderMoves）保证每个走法只调用一次，结果直接写回 move.order，
     // 排序阶段退化为纯整数比较（旧实现每次比较重算两个 key，是纯浪费）。
+    // 根节点（isRoot）只用静态启发分：既不套用 TT/杀手/历史，也不把上一迭代
+    // 的最佳走法置顶（2026-09-13 移除）——置顶会让“分差内并列时永远沿用上一
+    // 迭代的走法”成为确定性偏置，与根节点随机的多样性目标冲突；每次迭代的
+    // 最佳走法由 searchRoot 的搜索结果本身给出，不依赖排序置顶。
     int32_t key = move.order;
-    if (isRoot) {
-        if (ctx.lastCompletedDepth > 0 && isSameMove(move, ctx.bestMove)) {
-            key += 8000000;
-        }
-    }
-    else {
+    if (!isRoot) {
         if (isSameMove(move, ttMove)) {
             key += 4000000;
         }

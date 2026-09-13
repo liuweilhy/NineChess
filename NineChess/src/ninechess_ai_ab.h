@@ -67,9 +67,12 @@ public:
     struct SearchOptions {
         int64_t timeLimitMs = 0;    // 每次搜索的时间预算；0 = 不限时（纯深度）
         uint32_t threads = defaultThreadCount(); // 并行线程数（>=1；Lazy SMP）
-        uint32_t randomness = 0;    // 0 = 纯最优；>0 启用根节点随机（分差阈值 + 加权）
-        int32_t randomGap = 60;     // 随机候选集与最优的分差阈值（估值单位）
-        int32_t randomPlies = 0;    // 仅根局面已走命令数 < N 时启用根随机，之后恢复纯最优；
+        uint32_t randomness = 1;    // 根节点随机开关：0 = 纯最优；>0 = 启用。
+                                     // 数值大小无区别（引擎只判断 >0），
+                                     // 习惯取 1；彻底关闭请置 0。
+        int32_t randomGap = 30;    // 随机候选集与最优的分差阈值（估值单位）；
+                                     // 分差超过该值的走法不进入随机候选。
+        int32_t randomPlies = 10;  // 仅根局面已走命令数 < N 时启用根随机，之后恢复纯最优；
                                     // 0 = 不限制（全程随机，行为与旧版一致）。开局对称
                                     // 等价着法多、随机损失小；中残局每一手都关键。
         HashMode hashMode = HashMode::OpeningCanonical;
@@ -141,8 +144,8 @@ public:
     void quit() { m_requiredQuit.store(true); }
 
     // 以给定深度执行迭代加深 Alpha-Beta 搜索，返回最终估值。
-    // 若配置了 timeLimitMs，会在预算内尽可能完成更深的迭代，
-    // 中断时保留最后一次完整算完的迭代结果作为 bestMove()。
+    // 搜索到请求深度即止；若配置了 timeLimitMs，时间预算只作为
+    // 超时中断的上限，中断时保留最后一次完整算完的迭代结果作为 bestMove()。
     // 若配置了 threads > 1，采用 Lazy SMP 并行搜索。
     int alphaBetaPruning(int depth);
 
