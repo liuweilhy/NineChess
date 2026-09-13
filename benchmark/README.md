@@ -4,6 +4,15 @@
 纯命令流格式（UTF-8 无 BOM，首行 `r<规则>s<限步>t0`，0-based 坐标），可在
 `NineChessConsole` / GUI 中直接回放。
 
+## 引擎版本称谓
+
+- **2018版**：提交 a588f4a 的引擎副本（`old_engine/`，namespace ncold）。
+- **5月版**：提交 d78811a 的引擎副本（`may_engine/`，namespace ncmay）。
+- **9D版**：自提交 de1d52e 起的当前引擎（`NineChess/src`，含 2026-09-13
+  浅层剪枝/单遍估值/战术生成/静态分融合/历史三连查表/胜负分 ply 修正等批次）。
+  该称谓只在 benchmark 语境内使用（结果报告、索引、与 AI Agent 的对话）；
+  源码与算法文档仍称"当前版/新引擎"。
+
 ## 目录结构
 
 ```
