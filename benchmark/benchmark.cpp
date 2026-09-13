@@ -43,9 +43,15 @@ using std::vector;
 namespace {
 
 constexpr int kRuleCount = 4;
-constexpr int kStepsLimit = 100;   // 100 条命令未分胜负判和
+// 判和步数：默认 100 条命令未分胜负判和。试验用命令行尾部第 14 个可选参数
+// （argv[13]）可覆盖；缺省时行为与既往版本完全一致（含棋谱 "rXsNt0" 标记）。
+int g_stepsLimit = 100;
 constexpr int kTimeLimitMs = 10000; // 每步限时
 constexpr int kWatchdogGraceMs = 15000; // 引擎超时后再等中断生效的宽限期
+
+// 判和终局原因的规范文本：随 g_stepsLimit 变化，供摘要与棋谱判重共用，
+// 避免改判和步数后摘要仍显示旧数字。
+string stepsLimitReason() { return std::to_string(g_stepsLimit) + "步判和"; }
 
 // ------------------------- 输出工具 -------------------------
 
@@ -434,7 +440,7 @@ GameReport playOneGame(int rule, int game, bool oldIsPlayer1,
     gameNew.start();
 
     ncold::NineChess gameOld;
-    gameOld.setData(&ncold::NineChess::RULES[rule], kStepsLimit, 0);
+    gameOld.setData(&ncold::NineChess::RULES[rule], g_stepsLimit, 0);
     gameOld.start();
 
     // ---------------- 初始化双引擎 ----------------
@@ -486,15 +492,15 @@ GameReport playOneGame(int rule, int game, bool oldIsPlayer1,
             }
             break;
         }
-        // ---- 100 条命令判和（与 GUI applyStepLimit 语义一致）----
-        if ((int)gameNew.getCmdList()->size() >= kStepsLimit) {
+        // ---- g_stepsLimit 条命令判和（与 GUI applyStepLimit 语义一致）----
+        if ((int)gameNew.getCmdList()->size() >= g_stepsLimit) {
             gameNew.command("=="); // 棋谱补记判和命令（旧模型不支持，无需同步）
-            report.endReason = "100步判和";
+            report.endReason = stepsLimitReason();
             report.winner = GameWinner::Draw;
             break;
         }
-        // ---- 保险丝：正常情况下 100 步内必终局 ----
-        if (report.commands >= 4 * kStepsLimit) {
+        // ---- 保险丝：正常情况下 g_stepsLimit 步内必终局 ----
+        if (report.commands >= 4 * g_stepsLimit) {
             report.endReason = "步数保险丝触发，判和";
             report.winner = GameWinner::Draw;
             break;
@@ -637,9 +643,9 @@ GameReport playOneGame(int rule, int game, bool oldIsPlayer1,
     sprintf(fname, "%s\\rule%d_g%02d_%s_%s.txt", resultsDir.c_str(), rule, game + 1, seatTag, resultTag);
     FILE* fp = nullptr;
     if (fopen_s(&fp, fname, "wb") == 0 && fp) {
-        fprintf(fp, "r%ds%dt0\n", rule, kStepsLimit);
+        fprintf(fp, "r%ds%dt0\n", rule, g_stepsLimit);
         fputs(record.c_str(), fp);
-        if (report.winner == GameWinner::Draw && report.endReason == "100步判和")
+        if (report.winner == GameWinner::Draw && report.endReason == stepsLimitReason())
             fprintf(fp, "==\n");
         fclose(fp);
         report.recordFile = fname;
@@ -667,6 +673,7 @@ int main(int argc, char* argv[])
     if (argc >= 11) g_pointValue = atoi(argv[10]);
     if (argc >= 12) g_randomPlies = atoi(argv[11]);
     if (argc >= 13) g_randomGap = atoi(argv[12]);
+    if (argc >= 14) g_stepsLimit = atoi(argv[13]);   // 判和步数（试验用，默认 100）
 
     // ---- 建输出目录 ----
     CreateDirectoryA("results", nullptr);
@@ -685,7 +692,7 @@ int main(int argc, char* argv[])
     printf("AIBenchmark: 旧引擎(深度%d, 单线程) vs 新引擎(深度%d, %d线程, %s)\n",
         oldDepth, newDepth, newThreads, describeNewEngineConfig().c_str());
     printf("赛制: 每步%dms强制出招, %d条命令未分胜负判和, 奇偶局交替执先\n\n",
-        timeLimitMs, kStepsLimit);
+        timeLimitMs, g_stepsLimit);
     verbosePrintf("AIBenchmark 旧深度=%d 新深度=%d 线程=%d 限时=%dms 局数=%d/规则 新引擎配置: %s\n",
         oldDepth, newDepth, newThreads, timeLimitMs, gamesPerRule,
         describeNewEngineConfig().c_str());
@@ -779,7 +786,7 @@ int main(int argc, char* argv[])
             fprintf(fp, "旧引擎(2018 a588f4a, 单线程, 深度%d) vs 新引擎(当前, %d线程, 深度%d, %s)\n",
                 oldDepth, newThreads, newDepth, describeNewEngineConfig().c_str());
             fprintf(fp, "赛制: 每步%dms强制出招, %d条命令判和, 奇偶局交替执先\n",
-                timeLimitMs, kStepsLimit);
+                timeLimitMs, g_stepsLimit);
             fprintf(fp, "总计: 旧%d胜 新%d胜 和%d 异常%d, 用时%.1f分钟\n",
                 totalOld, totalNew, totalDraw, totalError, totalMin);
             fclose(fp);

@@ -33,7 +33,13 @@ using std::vector;
 
 namespace {
 
-constexpr int kStepsLimit = 100;
+// 判和步数：默认 100 条命令未分胜负判和。试验用命令行尾部第 12 个可选参数
+// （argv[11]）可覆盖；缺省时行为与既往版本完全一致（含棋谱 "rXsNt0" 标记）。
+int g_stepsLimit = 100;
+
+// 判和终局原因的规范文本：随 g_stepsLimit 变化，供摘要与棋谱判重共用，
+// 避免改判和步数后摘要仍显示旧数字。
+string stepsLimitReason() { return std::to_string(g_stepsLimit) + "步判和"; }
 
 // A/B 隔离开关（命令行注入）
 int g_pureBest = 0;
@@ -326,13 +332,13 @@ GameReport playOneGame(int rule, int game, bool mayIsPlayer1,
             }
             break;
         }
-        if ((int)gameNew.getCmdList()->size() >= kStepsLimit) {
+        if ((int)gameNew.getCmdList()->size() >= g_stepsLimit) {
             gameNew.command("==");
-            report.endReason = "100步判和";
+            report.endReason = stepsLimitReason();
             report.winner = GameWinner::Draw;
             break;
         }
-        if (report.commands >= 4 * kStepsLimit) {
+        if (report.commands >= 4 * g_stepsLimit) {
             report.endReason = "步数保险丝触发，判和";
             report.winner = GameWinner::Draw;
             break;
@@ -455,9 +461,9 @@ GameReport playOneGame(int rule, int game, bool mayIsPlayer1,
     sprintf(fname, "%s\\rule%d_g%02d_%s_%s.txt", resultsDir.c_str(), rule, game + 1, seatTag, resultTag);
     FILE* fp = nullptr;
     if (fopen_s(&fp, fname, "wb") == 0 && fp) {
-        fprintf(fp, "r%ds%dt0\n", rule, kStepsLimit);
+        fprintf(fp, "r%ds%dt0\n", rule, g_stepsLimit);
         fputs(record.c_str(), fp);
-        if (report.winner == GameWinner::Draw && report.endReason == "100步判和")
+        if (report.winner == GameWinner::Draw && report.endReason == stepsLimitReason())
             fprintf(fp, "==\n");
         fclose(fp);
         report.recordFile = fname;
@@ -484,6 +490,7 @@ int main(int argc, char* argv[])
     if (argc >= 9) g_pureBest = atoi(argv[8]);
     if (argc >= 10) g_winPressure = atoi(argv[9]);
     if (argc >= 11) g_pointValue = atoi(argv[10]);
+    if (argc >= 12) g_stepsLimit = atoi(argv[11]);   // 判和步数（试验用，默认 100）
 
     CreateDirectoryA("results_may", nullptr);
     const string resultsDir = "results_may";
@@ -501,7 +508,7 @@ int main(int argc, char* argv[])
     printf("AIBenchmarkMay: 5月引擎(d78811a, 深度%d, 单线程) vs 新引擎(深度%d, %d线程, %s)\n",
         mayDepth, newDepth, newThreads, describeNewEngineConfig().c_str());
     printf("赛制: 每步%dms强制出招, %d条命令未分胜负判和, 奇偶局交替执先\n\n",
-        timeLimitMs, kStepsLimit);
+        timeLimitMs, g_stepsLimit);
     verbosePrintf("AIBenchmarkMay 5月深度=%d 新深度=%d 线程=%d 限时=%dms 局数=%d/规则 新引擎配置: %s\n",
         mayDepth, newDepth, newThreads, timeLimitMs, gamesPerRule,
         describeNewEngineConfig().c_str());
@@ -593,7 +600,7 @@ int main(int argc, char* argv[])
             fprintf(fp, "5月引擎(d78811a, 单线程, 深度%d) vs 新引擎(%d线程, 深度%d, %s)\n",
                 mayDepth, newThreads, newDepth, describeNewEngineConfig().c_str());
             fprintf(fp, "赛制: 每步%dms强制出招, %d条命令判和, 奇偶局交替执先\n",
-                timeLimitMs, kStepsLimit);
+                timeLimitMs, g_stepsLimit);
             fprintf(fp, "总计: 5月%d胜 新%d胜 和%d 异常%d, 用时%.1f分钟\n",
                 totalMay, totalNew, totalDraw, totalError, totalMin);
             fclose(fp);
