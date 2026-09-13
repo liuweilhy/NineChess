@@ -258,6 +258,16 @@ int NineChess_AI_AB::alphaBetaPruning(int depth)
     if (m_options.dynamicDepth && m_root.getPhase() == GAME_MID) {
         depth = std::min(depth + 2, kMaxPly - 1);
     }
+    // 限时模式（timeLimitMs > 0）：时间预算才是真实约束，深度上限直接放开
+    // 到 kMaxPly-1，由预算耗尽中断并保留最后一个完整迭代（迭代从 1 开始
+    // 逐层加深，请求深度天然成为保底）。实测旧实现“到请求深度即停”会让
+    // 10 秒预算只用到几十毫秒（中局深度 12 约 0.25~1 秒即完成），90% 以上
+    // 算力被白白放弃——本游戏分支数随阶段骤减，等预算可再深入 3~6 层。
+    // 纯深度模式（timeLimitMs == 0）行为不变：搜索到请求深度即止，
+    // Console 的 search/match/vs 等确定性测试路径不受影响。
+    if (m_options.timeLimitMs > 0) {
+        depth = kMaxPly - 1;
+    }
     m_masterDone.store(false);
     seedRng();
 
@@ -675,6 +685,7 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
 
     const int originalAlpha = alpha;
     const int originalBeta = beta;
+    const bool maximizing = ctx.board.getTurn() == PLAYER1;
 
     // 本节点的置换表键只计算一次，probe 与 store 共用。
     // canonical 模式下一次计算要跑 16 个视角哈希，原来 probe/store 各算一遍是纯浪费。
@@ -686,8 +697,59 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
     // - 精确命中时可以直接复用；
     // - 边界命中时可以先收紧窗口，再决定是否已经足够剪枝；
     // - 命中的最佳走法用于后续走法排序。
-    if (probeTransposition(ctx, hash, depth, alpha, beta, ttValue, ttMove)) {
+    if (probeTransposition(ctx, hash, depth, alpha, beta, ttValue, ttMove, ply)) {
         return ttValue;
+    }
+
+    // ===== 浅层剪枝（futility，写死阈值，不再新增开关） =====
+    // 1) 逆 futility（RFC）：静态估值好到“减去裕度仍出窗口”时直接按估值返回。
+    //    裕度按“单步估值最大跨层跳变”定值：一次成三（112）+ 一次提子待提
+    //    （220）+ 在盘子差（180）约 500，depth 1/2 分别取 400/700。
+    // 2) depth 1 futility：静态分加裕度仍够不到 alpha 的安静走法（排序键
+    //    < 2400：不成三，也无 TT/杀手/高历史加成）直接跳过，其子节点就是
+    //    静默搜索，安静走法的乐观收益远到不了 +400。
+    // 两个守卫避开本游戏的剪枝盲区：
+    // - 提子阶段是强制战术，不剪；
+    // - 中局轮走方机动性 ≤2 时不做 RFC（困毙/被闷类局面必须搜清，
+    //   莫里斯/打三棋的低机动即逼近胜负），对手机动性 ≤2 时不剪安静走法
+    //   （一手安静棋可能直接堵死对手取胜）；
+    // - 摆满判负规则（打三棋）的开局末期（空位 < 5）不剪，
+    //   避免误判“摆满判负”这类就在眼前 2 层内的终局。
+    // 全部被剪走法都未搜索时返回静态分加裕度的乐观界（它是该节点值的
+    // 合理上界，入库语义为 UPPER），避免把 ±INF 当真值存入置换表。
+    int standPat = 0;
+    bool haveStandPat = false;
+    bool futilitySkipQuiet = false;
+    if (depth <= 2 && ctx.board.getAction() != ACTION_CAPTURE) {
+        const bool fullBoardRisk = ctx.board.m_rule.fullBoardIsLoss
+            && ctx.board.getPhase() == GAME_OPENING
+            && POPCOUNT32(~(ctx.board.m_data.player1Board | ctx.board.m_data.player2Board
+                | ctx.board.m_data.forbiddenBoard) & ctx.board.m_validBoardMask) < 5u;
+        if (!fullBoardRisk) {
+            int mobility1 = 0;
+            int mobility2 = 0;
+            standPat = evaluate(ctx, ply, mobility1, mobility2);
+            haveStandPat = true;
+            const bool midgame = ctx.board.getPhase() == GAME_MID;
+            const int ownMobility = maximizing ? mobility1 : mobility2;
+            const int oppMobility = maximizing ? mobility2 : mobility1;
+            if (!midgame || ownMobility >= 3) {
+                const int margin = depth >= 2 ? 700 : 400;
+                if (maximizing) {
+                    if (standPat - margin >= beta) {
+                        return standPat;
+                    }
+                }
+                else {
+                    if (standPat + margin <= alpha) {
+                        return standPat;
+                    }
+                }
+            }
+            if (depth == 1 && (!midgame || oppMobility >= 3)) {
+                futilitySkipQuiet = true;
+            }
+        }
     }
 
     MoveList moves;
@@ -698,12 +760,21 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
 
     orderMoves(ctx, moves, false, ttMove, ply);
 
-    const bool maximizing = ctx.board.getTurn() == PLAYER1;
     int bestValue = maximizing ? -INF_SCORE : INF_SCORE;
     Move bestMoveAtNode;
     bool hasBestMove = false;
+    bool allMovesPruned = true;
 
     for (size_t i = 0; i < moves.count; ++i) {
+        // depth 1 futility：安静走法（排序键 < 2400，即不成三且无
+        // TT/杀手/高历史加成）在静态分加裕度仍够不到 alpha 时跳过。
+        // 条件随 alpha 抬高单调成立，循环内逐走法判定。
+        if (futilitySkipQuiet && moves.moves[i].order < 2400
+            && (maximizing ? standPat + 400 <= alpha : standPat - 400 >= beta)) {
+            continue;
+        }
+        allMovesPruned = false;
+
         // PVS：首走法用当前窗口搜索；其余走法先以零宽窗口试探，
         // 只有试探值落回 (alpha, beta) 内（可能是更优走法但值不精确）才全窗口重搜。
         // 排序质量越高试探失败率越高，等效子树越小。
@@ -750,7 +821,8 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
         }
 
         if (reduction > 0 && value > alpha) {
-            // 减搜失败高：该走法可能被低估，恢复全深重搜（零宽窗口）。
+            // 减搜失败高：该走法可能被低估，恢复全深重搜（零宽窗口）验证后
+            // 才能以全深度语义入库（下界可靠）；对 minimizer 对称适用。
             applyMove(ctx, moves.moves[i], snapshot);
             value = search(ctx, depth - 1 + extension, childAlpha, childBeta, ply + 1);
             undoMove(ctx, snapshot);
@@ -811,9 +883,16 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
         }
     }
 
+    // 走法被 futility 全部剪掉时，以“静态分 ± 裕度”的乐观界兜底：
+    // 该值是节点真值的合理上界（每个被剪走法的收益都到不了 alpha），
+    // 入库为 UPPER 语义，不会把 ±INF 当真值污染置换表。
+    if (allMovesPruned && haveStandPat) {
+        bestValue = maximizing ? standPat + 400 : standPat - 400;
+    }
+
     // 用进入节点时的原始窗口来决定 bestValue 是精确值、上界还是下界。
     storeTransposition(ctx, hash, depth, bestValue, originalAlpha, originalBeta,
-        hasBestMove ? bestMoveAtNode : Move());
+        hasBestMove ? bestMoveAtNode : Move(), ply);
     return bestValue;
 }
 
@@ -848,21 +927,19 @@ int NineChess_AI_AB::quiescence(SearchContext& ctx, int alpha, int beta, int ply
 
     MoveList moves;
     if (ctx.board.getAction() == ACTION_CAPTURE) {
+        // 提子阶段是强制走法，全部展开；生成时已带静态启发分，
+        // 按分数降序尝试可更早触发静默截断（旧实现算了分却从不排序）。
         generateCaptureMoves(ctx, moves);
+        std::sort(moves.moves.begin(),
+            moves.moves.begin() + static_cast<std::ptrdiff_t>(moves.count),
+            [](const Move& lhs, const Move& rhs) {
+                return lhs.order > rhs.order;
+            });
     }
     else {
-        generateMoves(ctx, moves);
-        size_t kept = 0;
-        for (size_t i = 0; i < moves.count; ++i) {
-            const Move& move = moves.moves[i];
-            const bool formsMill =
-                countClaimableMillsAfterOccupy(ctx, ctx.board.getTurn(),
-                    move.from, move.to) > 0;
-            if (formsMill) {
-                moves.moves[kept++] = move;
-            }
-        }
-        moves.count = kept;
+        // 其它阶段只展开“能形成新三连”的走法（即将到来的提子收益）。
+        // 生成路径与旧的“全量生成再过滤”逐条等价，但跳过静态启发打分。
+        generateTacticalMoves(ctx, moves);
     }
 
     for (size_t i = 0; i < moves.count; ++i) {
@@ -902,6 +979,16 @@ int NineChess_AI_AB::quiescence(SearchContext& ctx, int alpha, int beta, int ply
 
 int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply) const
 {
+    int mobility1 = 0;
+    int mobility2 = 0;
+    return evaluate(ctx, ply, mobility1, mobility2);
+}
+
+int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply,
+    int& outMobility1, int& outMobility2) const
+{
+    outMobility1 = 0;
+    outMobility2 = 0;
     if (ctx.board.getPhase() == GAME_OVER) {
         return evaluateTerminal(ctx, ply);
     }
@@ -921,23 +1008,20 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply) const
         static_cast<int>(ctx.board.getPlayer1InHand())
         - static_cast<int>(ctx.board.getPlayer2InHand());
 
-    // 可提三连、活二、成三点、三连中棋子同域扫描，一遍完成；
-    // 编号规则下，历史中已登记过的同编号三连不再视为可提三连。
-    int claimable1 = 0;
-    int openMill1 = 0;
-    int forkPoint1 = 0;
-    int claimable2 = 0;
-    int openMill2 = 0;
-    int forkPoint2 = 0;
-    uint32_t inMillMask1 = 0;
-    uint32_t inMillMask2 = 0;
-    countMillsAndOpenMills(ctx, PLAYER1, occupied, claimable1, openMill1, forkPoint1, inMillMask1);
-    countMillsAndOpenMills(ctx, PLAYER2, occupied, claimable2, openMill2, forkPoint2, inMillMask2);
-    const int millDiff = claimable1 - claimable2;
-    const int openMillDiff = openMill1 - openMill2;
+    // 可提三连、活二、成三点、三连中棋子统计：单遍线扫描同时算齐双方
+    // （旧实现每方各扫一遍全部连线）；编号规则下，历史中已登记过的
+    // 同编号三连不再视为可提三连。
+    MillScan scanP1;
+    MillScan scanP2;
+    countMillsBothSides(ctx, occupied, scanP1, scanP2);
+    const int millDiff = scanP1.claimable - scanP2.claimable;
+    const int openMillDiff = scanP1.openMills - scanP2.openMills;
+    const int forkPoint1 = scanP1.forkPoints;
+    const int forkPoint2 = scanP2.forkPoints;
+    const int inMillMask1 = static_cast<int>(POPCOUNT32(board1 & scanP1.inMillMask));
+    const int inMillMask2 = static_cast<int>(POPCOUNT32(board2 & scanP2.inMillMask));
+    const int inMillDiff = inMillMask1 - inMillMask2;
     const int pointValueDiff = countPointValue(ctx, board1) - countPointValue(ctx, board2);
-    const int inMillDiff = static_cast<int>(POPCOUNT32(board1 & inMillMask1))
-        - static_cast<int>(POPCOUNT32(board2 & inMillMask2));
 
     int mobility1 = 0;
     int mobility2 = 0;
@@ -946,6 +1030,8 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply) const
         mobility2 = countMobility(ctx, PLAYER2, occupied);
     }
     const int mobilityDiff = mobility1 - mobility2;
+    outMobility1 = mobility1;
+    outMobility2 = mobility2;
 
     // 博弈阶段插值：phaseT ∈ [0, 256]，256 = 纯开局权重，0 = 纯中局权重。
     // tapered 模式下按“剩余手牌比例”连续过渡，消除摆子结束那一刻的估值跳变；
@@ -1177,6 +1263,84 @@ void NineChess_AI_AB::generateCaptureMoves(SearchContext& ctx, MoveList& list) c
     }
 }
 
+void NineChess_AI_AB::generateTacticalMoves(SearchContext& ctx, MoveList& list) const
+{
+    // 静默搜索专用走法生成：只产出“能形成新三连”的落子/走子。
+    // 与旧实现“generateMoves 全量生成（含静态启发打分）再按成三过滤”
+    // 逐条等价——同样的遍历顺序（目标点位升序）、同样的成三判定
+    // （countClaimableMillsAfterOccupy，编号规则含历史登记剔除）——
+    // 但完全跳过静态打分（静默搜索不排序落子/走子，打分是纯浪费）。
+    list.count = 0;
+    if (ctx.board.getPhase() == GAME_OVER) {
+        return;
+    }
+
+    if (ctx.board.getAction() == ACTION_CAPTURE) {
+        generateCaptureMoves(ctx, list);
+        return;
+    }
+
+    const NineChess::Players turn = ctx.board.getTurn();
+
+    if (ctx.board.getPhase() == GAME_NOTSTARTED || ctx.board.getPhase() == GAME_OPENING) {
+        const uint32_t occupied =
+            (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
+            & ctx.board.m_validBoardMask;
+        uint32_t empty = (~occupied) & ctx.board.m_validBoardMask;
+
+        while (empty != 0u && list.count < MoveList::MAX_COUNT) {
+            const int32_t pos = CTZ32(empty);
+            if (countClaimableMillsAfterOccupy(ctx, turn, -1, pos) > 0) {
+                Move& move = list.moves[list.count++];
+                move.type = MOVE_PLACE;
+                move.from = -1;
+                move.to = static_cast<int8_t>(pos);
+                move.order = 0;
+            }
+            empty &= empty - 1u;
+        }
+        return;
+    }
+
+    if (ctx.board.getPhase() == GAME_MID) {
+        if (ctx.board.getAction() == ACTION_PLACE && ctx.board.isValidPos(ctx.board.m_selectedPos)) {
+            appendMillFormingShifts(ctx, list, ctx.board.m_selectedPos);
+        }
+        else {
+            uint32_t pieces = ctx.board.boardOf(turn) & ctx.board.m_validBoardMask;
+            while (pieces != 0u && list.count < MoveList::MAX_COUNT) {
+                const int32_t fromPos = CTZ32(pieces);
+                appendMillFormingShifts(ctx, list, fromPos);
+                pieces &= pieces - 1u;
+            }
+        }
+    }
+}
+
+void NineChess_AI_AB::appendMillFormingShifts(SearchContext& ctx, MoveList& list, int32_t fromPos) const
+{
+    // generateTacticalMoves 的中局子步骤：从 fromPos 出发，只收“移过去即成三”的落点。
+    const uint32_t occupied =
+        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
+        & ctx.board.m_validBoardMask;
+    const uint32_t empty = (~occupied) & ctx.board.m_validBoardMask;
+    uint32_t targets = ctx.board.canFly(ctx.board.getTurn())
+        ? empty
+        : ctx.board.m_moveMask[fromPos] & empty & ctx.board.m_validBoardMask;
+
+    while (targets != 0u && list.count < MoveList::MAX_COUNT) {
+        const int32_t toPos = CTZ32(targets);
+        if (countClaimableMillsAfterOccupy(ctx, ctx.board.getTurn(), fromPos, toPos) > 0) {
+            Move& move = list.moves[list.count++];
+            move.type = MOVE_SHIFT;
+            move.from = static_cast<int8_t>(fromPos);
+            move.to = static_cast<int8_t>(toPos);
+            move.order = 0;
+        }
+        targets &= targets - 1u;
+    }
+}
+
 int32_t NineChess_AI_AB::orderKey(SearchContext& ctx, const Move& move, bool isRoot,
     const Move& ttMove, int ply) const
 {
@@ -1305,14 +1469,67 @@ void NineChess_AI_AB::orderMoves(SearchContext& ctx, MoveList& list, bool isRoot
 
 int NineChess_AI_AB::scorePlaceOrShiftMove(SearchContext& ctx, int32_t fromPos, int32_t toPos) const
 {
+    // 静态启发分（数值与旧版“四个独立 helper 各自扫线”完全一致）：
+    //   成三 ×2400 / 活二 ×240 / 阻断对手威胁 ×180 / 穿线数 ×48 / 拆己方三连 −160。
+    // 融合实现：一趟扫描 toPos 穿过的线（≤3 条），同时算齐前四项；
+    // 掩码类（own/opp/occupied 及其“走后”版本）只算一次共享，
+    // 省去每个 helper 重复取棋盘、重复按位与的开销（走法生成每节点必经）。
     const NineChess::Players turn = ctx.board.getTurn();
     const NineChess::Players opponent = NineChess::opponentOf(turn);
 
-    int score = 0;
-    score += countClaimableMillsAfterOccupy(ctx, turn, fromPos, toPos) * 2400;
-    score += countOpenMillsAfterOccupy(ctx, turn, fromPos, toPos) * 240;
-    score += countBlockedThreats(ctx, opponent, toPos) * 180;
-    score += countLinesThroughPos(ctx, turn, toPos) * 48;
+    const uint32_t own = ctx.board.boardOf(turn) & ctx.board.m_validBoardMask;
+    const uint32_t opp = ctx.board.boardOf(opponent) & ctx.board.m_validBoardMask;
+    const uint32_t occupied =
+        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
+        & ctx.board.m_validBoardMask;
+
+    // “走后”的己方棋盘与占用棋盘：编号规则的成三判定与活二判定共用。
+    uint32_t ownAfter = own;
+    uint32_t occAfter = occupied;
+    if (fromPos >= 0) {
+        const uint32_t fromBit = NineChess::bitOf(fromPos);
+        ownAfter &= ~fromBit;
+        occAfter &= ~fromBit;
+    }
+    const uint32_t toBit = NineChess::bitOf(toPos);
+    ownAfter |= toBit;
+    occAfter |= toBit;
+
+    int claimable = 0;
+    int openAfter = 0;
+    int blockedThreats = 0;
+    int linesThrough = 0;
+    for (uint32_t index = 0; index < ctx.board.m_posLineCount[toPos]; ++index) {
+        const int32_t lineId = ctx.board.m_posLineIds[toPos][index];
+        if (lineId < 0) {
+            continue;
+        }
+        const uint32_t mask = ctx.board.m_lineMasks[lineId];
+
+        const uint32_t ownAfterBits = ownAfter & mask;
+        if (ownAfterBits == mask) {
+            // 编号规则：历史中已登记过的同编号三连不能再提子，不计入
+            // （与 countClaimableMillsAfterOccupy 同一判定）。
+            if (ctx.board.m_rule.allowRepeatedMills
+                || !isHypotheticalMillInHistory(ctx, turn,
+                    static_cast<uint32_t>(lineId), fromPos, toPos)) {
+                ++claimable;
+            }
+        }
+        else if (POPCOUNT32(ownAfterBits) == 2u && POPCOUNT32(occAfter & mask) == 2u) {
+            ++openAfter;
+        }
+
+        if (POPCOUNT32(opp & mask) == 2u && POPCOUNT32(occupied & mask) == 2u) {
+            ++blockedThreats;
+        }
+        linesThrough += static_cast<int>(POPCOUNT32(own & mask));
+    }
+
+    int score = claimable * 2400;
+    score += openAfter * 240;
+    score += blockedThreats * 180;
+    score += linesThrough * 48;
 
     if (fromPos >= 0) {
         score -= static_cast<int>(ctx.board.countMillsAt(fromPos)) * 160;
@@ -1386,6 +1603,8 @@ void NineChess_AI_AB::applyMove(SearchContext& ctx, const Move& move, Snapshot& 
         }
         for (size_t k = snapshot.millHistorySize; k < data.millHistory.size(); ++k) {
             ctx.hardHistoryAccum ^= hardHashHistoryTerm(data.millHistory[k]);
+            // 历史三连查表同步：本步新登记的三连计数 +1。
+            ++ctx.millKeySeen[data.millHistory[k]];
         }
     }
 }
@@ -1400,8 +1619,13 @@ void NineChess_AI_AB::undoMove(SearchContext& ctx, const Snapshot& snapshot)
     for (int i = 0; i < NUMBERED_PIECE_COUNT; ++i) {
         data.numberBoards[i] = snapshot.numberBoards[i];
     }
-    // millHistory 只增不减，长度回滚即可覆盖搜索路径上的全部变化。
-    if (data.millHistory.size() > snapshot.millHistorySize) {
+    // millHistory 只增不减，长度回滚即可覆盖搜索路径上的全部变化；
+    // 回滚前先把将被截断的历史三连在查表里计数 -1，保持同步。
+    if (!ctx.board.m_rule.allowRepeatedMills
+        && data.millHistory.size() > snapshot.millHistorySize) {
+        for (size_t k = snapshot.millHistorySize; k < data.millHistory.size(); ++k) {
+            --ctx.millKeySeen[data.millHistory[k]];
+        }
         data.millHistory.resize(snapshot.millHistorySize);
     }
     // 增量累加器与局面快照严格同步回滚。
@@ -1412,7 +1636,7 @@ void NineChess_AI_AB::undoMove(SearchContext& ctx, const Snapshot& snapshot)
 }
 
 bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int depth,
-    int& alpha, int& beta, int& value, Move& ttMove) const
+    int& alpha, int& beta, int& value, Move& ttMove, int ply) const
 {
     // 哈希模式说明见 makeSearchHash()：hash 已由调用方算好传入（已雪崩混合）。
     // 分片由哈希低 8 位路由，桶由第 8~18 位索引，桶内 2 槽依次探测。
@@ -1452,6 +1676,16 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
     ++ctx.stats.ttHits;
     value = static_cast<int16_t>(metaA & 0xffffu);
 
+    // 胜负分换算回绝对距离（见 storeTransposition 的入库换算说明）：
+    // 入库值是“距存储节点的相对距离”，当前命中发生在另一个 ply 上，
+    // 不换算会让取胜/失败距离恒偏乐观（早出 ply 差）。
+    if (value > WIN_SCORE - kMaxPly) {
+        value -= ply;
+    }
+    else if (value < -(WIN_SCORE - kMaxPly)) {
+        value += ply;
+    }
+
     const uint32_t moveType = (metaA >> TTStore::TT_TYPE_SHIFT) & 0x3u;
     if (moveType != MOVE_NONE) {
         ttMove.type = static_cast<MoveType>(moveType);
@@ -1480,7 +1714,7 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
 }
 
 void NineChess_AI_AB::storeTransposition(SearchContext& ctx, uint64_t hash, int depth, int value,
-    int alpha, int beta, const Move& bestMove) const
+    int alpha, int beta, const Move& bestMove, int ply) const
 {
     TTStore& store = s_ttStores[m_root.getRuleIndex()];
     TTStore::Shard& shard = store.shards[hash & (TTStore::SHARD_COUNT - 1u)];
@@ -1489,6 +1723,17 @@ void NineChess_AI_AB::storeTransposition(SearchContext& ctx, uint64_t hash, int 
     std::lock_guard<std::mutex> lock(shard.mutex);
 
     ++ctx.stats.ttStores;
+
+    // 胜负分入库前换算成“距本节点的相对距离”（+ply）：
+    // evaluateTerminal 产生的 WIN_SCORE-ply 编码的是“距搜索根的绝对步数”，
+    // 直接入库会让不同 ply 命中同一局面时读出错误的取胜/失败距离。
+    // 换算后取值域 (WIN_SCORE-kMaxPly, WIN_SCORE+128) ⊂ int16，打包安全。
+    if (value > WIN_SCORE - kMaxPly) {
+        value += ply;
+    }
+    else if (value < -(WIN_SCORE - kMaxPly)) {
+        value -= ply;
+    }
 
     // 打包新条目（位布局见 TTStore 注释）：
     // 若 bestValue 没有跳出原窗口，则它是精确值；
@@ -1649,7 +1894,12 @@ void NineChess_AI_AB::resetHardHashAccum(SearchContext& ctx) const
         ctx.hardLayerAccum ^= hardHashLayerTerm(data.numberBoards[i],
             data.player1Board, data.player2Board, i);
     }
+    // 历史三连查表与增量累加器同一口径全量重建：
+    // 局面整体替换后 millHistory 内容随之变化，applyMove/undoMove 的
+    // 差量维护不再连续，必须在这里清零重填。
+    ctx.millKeySeen.fill(0);
     for (const NineChess::MillKey key : data.millHistory) {
+        ++ctx.millKeySeen[key];
         ctx.hardHistoryAccum ^= hardHashHistoryTerm(key);
     }
 }
@@ -1713,40 +1963,64 @@ uint64_t NineChess_AI_AB::mixSelectedPos(uint64_t hash, int32_t selectedPos) con
 }
 
 
-void NineChess_AI_AB::countMillsAndOpenMills(SearchContext& ctx, NineChess::Players player,
-    uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints,
-    uint32_t& outInMillMask) const
+void NineChess_AI_AB::countMillsBothSides(SearchContext& ctx, uint32_t occupied,
+    MillScan& outP1, MillScan& outP2) const
 {
-    // 单遍完成原先多遍线扫描：可提三连（三子成线）、活二（两子成线且第三点为空）、
-    // 成三点集合（活二唯一空位，用于识别真双三连威胁）、
-    // 以及处于三连中的棋子掩码（封闭三连保护项，编号规则下登记与否都算）。
-    const uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
-    int claimable = 0;
-    int openMills = 0;
-    uint32_t threatMask = 0;
-    uint32_t inMillMask = 0;
+    // 单遍扫描全部连线，同时统计双方的可提三连、活二、成三点与
+    // 处于三连中的棋子掩码（旧实现每方各扫一遍全部连线，中局估值
+    // 热路径上约一半的线扫描开销是重复劳动）。
+    // 每条线 3 个点：一方 3 子时另一方必然 0 子、一方活二（2 子 + 唯一
+    // 空位）时另一方在该线也必然无活二，因此双方条件可独立判定，
+    // 数值与旧的“按玩家分遍扫描”逐位一致。
+    // 编号规则：历史中已登记过的同编号三连不能再提子，不计入可提三连，
+    // 但其棋子仍处于三连中（不可被提），照常计入 inMillMask。
+    const uint32_t board1 = ctx.board.boardOf(PLAYER1) & ctx.board.m_validBoardMask;
+    const uint32_t board2 = ctx.board.boardOf(PLAYER2) & ctx.board.m_validBoardMask;
+    int claimable1 = 0;
+    int claimable2 = 0;
+    int open1 = 0;
+    int open2 = 0;
+    uint32_t threat1 = 0;
+    uint32_t threat2 = 0;
+    uint32_t inMill1 = 0;
+    uint32_t inMill2 = 0;
+    const bool repeatedMills = ctx.board.m_rule.allowRepeatedMills;
     for (uint32_t lineId = 0; lineId < ctx.board.m_lineCount; ++lineId) {
         const uint32_t mask = ctx.board.m_lineMasks[lineId];
-        const uint32_t ownCount = POPCOUNT32(board & mask);
-        if (ownCount == MILL) {
-            inMillMask |= mask;
-            // 编号规则：历史中已登记过的同编号三连不能再提子，不再计入。
-            if (ctx.board.m_rule.allowRepeatedMills
-                || !isMillKeyInHistory(ctx, player, lineId)) {
-                ++claimable;
+        const uint32_t bits1 = board1 & mask;
+        const uint32_t bits2 = board2 & mask;
+        const uint32_t occBits = occupied & mask;
+        if (bits1 == mask) {
+            inMill1 |= mask;
+            if (repeatedMills || !isMillKeyInHistory(ctx, PLAYER1, lineId)) {
+                ++claimable1;
             }
         }
-        else if (ownCount == 2u && POPCOUNT32(occupied & mask) == 2u) {
-            ++openMills;
+        else if (POPCOUNT32(bits1) == 2u && occBits == bits1) {
             // 该活二的成三点（线内唯一空位）；多个活二的成三点互不相同才是真威胁，
             // 共点的双活二会被对手一手全堵死。
-            threatMask |= mask & ~occupied;
+            ++open1;
+            threat1 |= mask & ~occupied;
+        }
+        if (bits2 == mask) {
+            inMill2 |= mask;
+            if (repeatedMills || !isMillKeyInHistory(ctx, PLAYER2, lineId)) {
+                ++claimable2;
+            }
+        }
+        else if (POPCOUNT32(bits2) == 2u && occBits == bits2) {
+            ++open2;
+            threat2 |= mask & ~occupied;
         }
     }
-    outClaimable = claimable;
-    outOpen = openMills;
-    outForkPoints = static_cast<int>(POPCOUNT32(threatMask));
-    outInMillMask = inMillMask;
+    outP1.claimable = claimable1;
+    outP1.openMills = open1;
+    outP1.forkPoints = static_cast<int>(POPCOUNT32(threat1));
+    outP1.inMillMask = inMill1;
+    outP2.claimable = claimable2;
+    outP2.openMills = open2;
+    outP2.forkPoints = static_cast<int>(POPCOUNT32(threat2));
+    outP2.inMillMask = inMill2;
 }
 
 bool NineChess_AI_AB::isMillKeyInHistory(SearchContext& ctx, NineChess::Players player,
@@ -1756,7 +2030,10 @@ bool NineChess_AI_AB::isMillKeyInHistory(SearchContext& ctx, NineChess::Players 
         return false;
     }
     const NineChess::MillKey key = ctx.board.makeMillKeyForLine(player, lineId);
-    return ctx.board.hasMillKey(key);
+    // SearchContext 维护的 O(1) 查表替代 board.hasMillKey 的线性扫描；
+    // 表内容与 ctx.board.m_data.millHistory 严格同步
+    // （applyMove ++ / undoMove -- / resetHardHashAccum 全量重建）。
+    return ctx.millKeySeen[key] != 0;
 }
 
 bool NineChess_AI_AB::isHypotheticalMillInHistory(SearchContext& ctx, NineChess::Players player,
@@ -1784,7 +2061,7 @@ bool NineChess_AI_AB::isHypotheticalMillInHistory(SearchContext& ctx, NineChess:
         static_cast<uint32_t>(numbers[0]),
         static_cast<uint32_t>(numbers[1]),
         static_cast<uint32_t>(numbers[2]));
-    return ctx.board.hasMillKey(key);
+    return ctx.millKeySeen[key] != 0;
 }
 
 int32_t NineChess_AI_AB::nextPlacementNumber(SearchContext& ctx, NineChess::Players player) const
@@ -1836,32 +2113,6 @@ int NineChess_AI_AB::countMobility(SearchContext& ctx, NineChess::Players player
     return mobility;
 }
 
-int NineChess_AI_AB::countBlockedThreats(SearchContext& ctx, NineChess::Players player, int32_t pos) const
-{
-    if (!ctx.board.isValidPos(pos)) {
-        return 0;
-    }
-
-    const uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
-    const uint32_t occupied =
-        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
-        & ctx.board.m_validBoardMask;
-    int count = 0;
-
-    for (uint32_t index = 0; index < ctx.board.m_posLineCount[pos]; ++index) {
-        const int32_t lineId = ctx.board.m_posLineIds[pos][index];
-        if (lineId < 0) {
-            continue;
-        }
-
-        const uint32_t mask = ctx.board.m_lineMasks[lineId];
-        if (POPCOUNT32(board & mask) == 2u && POPCOUNT32(occupied & mask) == 2u) {
-            ++count;
-        }
-    }
-    return count;
-}
-
 int NineChess_AI_AB::countLinesThroughPos(SearchContext& ctx, NineChess::Players player, int32_t pos) const
 {
     if (!ctx.board.isValidPos(pos)) {
@@ -1901,38 +2152,6 @@ int NineChess_AI_AB::countClaimableMillsAfterOccupy(SearchContext& ctx, NineChes
             continue;
         }
         ++count;
-    }
-    return count;
-}
-
-int NineChess_AI_AB::countOpenMillsAfterOccupy(SearchContext& ctx, NineChess::Players player,
-    int32_t fromPos, int32_t toPos) const
-{
-    uint32_t board = ctx.board.boardOf(player) & ctx.board.m_validBoardMask;
-    uint32_t occupied =
-        (ctx.board.m_data.player1Board | ctx.board.m_data.player2Board | ctx.board.m_data.forbiddenBoard)
-        & ctx.board.m_validBoardMask;
-
-    if (fromPos >= 0) {
-        const uint32_t fromBit = NineChess::bitOf(fromPos);
-        board &= ~fromBit;
-        occupied &= ~fromBit;
-    }
-
-    const uint32_t toBit = NineChess::bitOf(toPos);
-    board |= toBit;
-    occupied |= toBit;
-
-    int count = 0;
-    for (uint32_t index = 0; index < ctx.board.m_posLineCount[toPos]; ++index) {
-        const int32_t lineId = ctx.board.m_posLineIds[toPos][index];
-        if (lineId < 0) {
-            continue;
-        }
-        const uint32_t mask = ctx.board.m_lineMasks[lineId];
-        if (POPCOUNT32(board & mask) == 2u && POPCOUNT32(occupied & mask) == 2u) {
-            ++count;
-        }
     }
     return count;
 }

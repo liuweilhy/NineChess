@@ -73,8 +73,6 @@ public:
                                     // 0 = 不限制（全程随机，行为与旧版一致）。开局对称
                                     // 等价着法多、随机损失小；中残局每一手都关键。
         HashMode hashMode = HashMode::OpeningCanonical;
-        size_t ttMaxEntries = 256u * 1024u; // 置换表容量参考值；数组化后实际容量固定为
-                                            // SHARD_COUNT × SLOT_COUNT = 512K，字段仅为兼容保留
         uint64_t seed = 0;          // 随机种子；0 = 每次随机
         int32_t pointValueWeight = 16;  // 点位结构价值权重；0 = 关闭（A/B 用）
         bool aspirationWindows = true;  // 根窗口随上一迭代估值收窄，失败时渐进放宽重搜
@@ -395,6 +393,13 @@ private:
         // realTrail 中的有效条目数。
         int realTrailCount = 0;
 
+        // 编号规则的历史三连快速查表：MillKey 全空间（16 bit）的出现计数。
+        // applyMove 对追加项 ++、undoMove 对回退项 --、局面整体重置时全量重建，
+        // 让估值/排序热路径用 O(1) 查表替代 NineChess::hasMillKey 的线性扫描
+        // （九连棋中局历史三连可达数十条，每叶子每成三线扫一遍是可观的常数）。
+        // lite 规则 millHistory 恒空、查表永不发生，无需维护。
+        std::array<uint8_t, 1u << 16> millKeySeen = {};
+
         // 编号规则 hard 哈希的增量累加器：
         // hardHashLayerTerm 的 XOR 累加（9 层）与 hardHashHistoryTerm 的 XOR 累加。
         // lite 规则不使用（保持为 0）。makePlainHash 用它与重算的 lite 部分合成
@@ -445,6 +450,10 @@ private:
     // 对非终局局面进行静态评估。
     int evaluate(SearchContext& ctx, int ply) const;
 
+    // 同上，但额外输出双方的机动性计数（仅中局阶段非零）。
+    // 浅层剪枝需要用它做“困毙/被闷”守卫，避免在低机动局面误剪。
+    int evaluate(SearchContext& ctx, int ply, int& outMobility1, int& outMobility2) const;
+
     // 对终局局面进行评估，通常直接给出胜负分。
     int evaluateTerminal(SearchContext& ctx, int ply) const;
 
@@ -452,6 +461,14 @@ private:
 
     // 按当前局面阶段统一生成合法走法列表。
     void generateMoves(SearchContext& ctx, MoveList& list) const;
+
+    // 静默搜索专用：只生成“能形成新三连”的落子/走子，或提子阶段的全部提子。
+    // 与旧实现“全量生成再按成三过滤”逐条等价（同样的遍历顺序与成三判定），
+    // 但完全跳过静态启发打分（静默搜索不排序落子/走子，打分是纯浪费）。
+    void generateTacticalMoves(SearchContext& ctx, MoveList& list) const;
+
+    // generateTacticalMoves 的中局子步骤：从 fromPos 出发只收“移过去即成三”的落点。
+    void appendMillFormingShifts(SearchContext& ctx, MoveList& list, int32_t fromPos) const;
 
     // 生成开局摆子阶段的落子走法。
     void generateOpeningMoves(SearchContext& ctx, MoveList& list) const;
@@ -504,12 +521,17 @@ private:
     // 命中时通过 ttMove 返回该节点已知的最佳走法（用于排序）。
     // hash 由调用方用 makeSearchHash() 计算一次后传入，
     // 避免 probe/store 各算一遍（canonical 模式下每遍要 16 次视角哈希）。
+    // ply 用于胜负分的相对距离换算（见 storeTransposition）。
     bool probeTransposition(SearchContext& ctx, uint64_t hash, int depth, int& alpha, int& beta,
-        int& value, Move& ttMove) const;
+        int& value, Move& ttMove, int ply) const;
 
     // 把当前节点结果写入置换表，同时记录该节点最佳走法。
+    // 胜负分（|value| > WIN_SCORE - kMaxPly）在入库前换算成“距本节点的相对
+    // 距离”（+ply），命中时再换算回绝对距离（-ply）：终端值 WIN_SCORE-ply
+    // 编码的是距搜索根的绝对步数，不同 ply 命中同一局面时若不换算会读出
+    // 错误的取胜/失败距离（恒偏乐观），影响引擎在多杀着线间的取舍。
     void storeTransposition(SearchContext& ctx, uint64_t hash, int depth, int value, int alpha, int beta,
-        const Move& bestMove) const;
+        const Move& bestMove, int ply) const;
 
     // 当新的真实局面开始搜索时，切换到置换表的新 generation。
     void beginTranspositionGeneration();
@@ -549,15 +571,21 @@ private:
     // 按当前规则从 s_evalWeightsPerRule 取权重，并套用 SearchOptions 覆盖项。
     void refreshWeights();
 
-    // 单遍扫描全部连线，同时统计某一方“可提三连”、“活二”、"成三点"与
-    // “处于三连中的棋子掩码”（统计的扫描域相同，合并后省去多遍线扫描；
-    // evaluate 热路径专用）。
+    // 单遍扫描全部连线的双玩家三连统计：可提三连、活二、成三点与
+    // “处于三连中的棋子掩码”一次算齐双方（统计域相同，合并后省去第二遍
+    // 全量线扫描；evaluate 热路径专用）。
     // 成三点 = 该方活二唯一空位；多个活二落在不同成三点构成真双三连威胁。
     // 编号规则下，历史中已登记过的同编号三连不再计入可提三连，
     // 但其棋子仍处于三连中（不可被提），照常计入 inMillMask。
-    void countMillsAndOpenMills(SearchContext& ctx, NineChess::Players player,
-        uint32_t occupied, int& outClaimable, int& outOpen, int& outForkPoints,
-        uint32_t& outInMillMask) const;
+    struct MillScan {
+        int claimable = 0;      // 可提三连（编号规则已剔除历史登记项）
+        int openMills = 0;      // 活二（两子成线且第三点为空）
+        int forkPoints = 0;     // 互不相同的成三点数
+        uint32_t inMillMask = 0; // 处于己方三连中的棋子掩码
+    };
+
+    void countMillsBothSides(SearchContext& ctx, uint32_t occupied,
+        MillScan& outP1, MillScan& outP2) const;
 
     // 判断某一方在指定三连线上形成的三连，是否已登记在历史中。
     bool isMillKeyInHistory(SearchContext& ctx, NineChess::Players player, uint32_t lineId) const;
@@ -573,19 +601,12 @@ private:
     // 统计某一方当前局面的机动性（occupied 由调用方传入，避免重复计算）。
     int countMobility(SearchContext& ctx, NineChess::Players player, uint32_t occupied) const;
 
-    // 统计某点位能阻断对手多少条潜在威胁线。
-    int countBlockedThreats(SearchContext& ctx, NineChess::Players player, int32_t pos) const;
-
     // 统计某点位穿过的己方线资源，用于估计此点的重要性。
     int countLinesThroughPos(SearchContext& ctx, NineChess::Players player, int32_t pos) const;
 
     // 估计把棋子占到 toPos 后可立即形成多少个可提三连。
     // 编号规则下，已在历史中登记过的同编号三连不计入。
     int countClaimableMillsAfterOccupy(SearchContext& ctx, NineChess::Players player,
-        int32_t fromPos, int32_t toPos) const;
-
-    // 估计把棋子占到 toPos 后可形成多少个活三。
-    int countOpenMillsAfterOccupy(SearchContext& ctx, NineChess::Players player,
         int32_t fromPos, int32_t toPos) const;
 
     // 统计某一方棋子所在点位的结构价值之和（board 为已套有效掩码的一方位棋盘）。

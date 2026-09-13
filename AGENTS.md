@@ -28,6 +28,9 @@
 - The current AI is bitboard-based and should prefer the fast no-validation APIs `chooseFast()`, `placeFast()`, and `captureFast()`.
 - Symmetry-aware transposition lookup is intentional. Equivalent positions under inner/outer turn, mirror, vertical flip, and discrete rotation may share cached scores.
 - When hashing `ACTION_PLACE` states, remember that `selectedPos` is part of the effective search state.
+- Documentation layout: `AI_SUMMARY.md` is the general overview shared by all algorithms; each algorithm has its own manual (`AI_ALPHABETA.md` is the Alpha-Beta engine's full logic explanation and parameter reference, including hardcoded constants and A/B methodology). When changing AI behavior or parameters, update the per-algorithm manual, not the overview.
+- Sentinel semantics: `SearchOptions::winPressureWeight` and `pointValueWeight` have NO -1 sentinel — their defaults (150/16) apply only when the field is left unset, and an explicitly passed -1 participates in evaluation as -1. By contrast, `stalematePressureWeight` / `forkThreatWeight` / `millSafetyWeight` treat any negative value as "use the rule-table default". A benchmark driver that passed -1 as "default" invalidated the original 2026-09 evalab_A/B/C experiments (fixed; see `benchmark/results/evalab_*/CORRECTION.md`).
+- Benchmark methodology: 80-game arms of the 8-thread Lazy SMP engine differ by about 5 wins even with identical configs; treat smaller deltas as noise and use deterministic single-thread seeded matches or larger samples before drawing conclusions. Alternating first move between odd/even games is mandatory for `vs`-style A/B.
 
 ## Naming And Compatibility
 
