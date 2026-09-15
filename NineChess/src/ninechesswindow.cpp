@@ -1,6 +1,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
+#include <QFont>
 #include <QMap>
 #include <QMessageBox>
 #include <QSettings>
@@ -24,6 +25,7 @@
 #include <QDebug>
 #include <QDesktopWidget>
 #include <QActionGroup>
+#include <QApplication>
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QEvent>
@@ -257,6 +259,79 @@ void saveLastManualDirectory(const QString &path)
     settings.setValue(QStringLiteral("manual/lastDirectory"), directory);
 }
 
+// ==================== 界面字体 ====================
+
+// .ui 里只写了设计时使用的中文字体 Microsoft YaHei，它是 Windows 独有的，
+// 且不含韩文字形：Windows 上日韩文只能靠系统隐式替换，Linux/macOS 上更是完全
+// 没有这个字体（缺 CJK 字体时会整片显示方框）。因此在其后追加一份跨平台的
+// 回退家族表——首选家族仍是 Microsoft YaHei，Windows 外观不变；找不到字体或
+// 缺字形时按表回退（日/韩文即命中各自字体），最后落到通用 sans-serif 交给
+// 平台的字体配置（fontconfig）处理。
+QStringList uiFontFamilies(const QFont &base)
+{
+    QStringList families;
+#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
+    families = base.families();
+#endif
+    if (families.isEmpty())
+        families << base.family();
+
+    const QStringList candidates{
+        QStringLiteral("Microsoft YaHei UI"),   // Windows：雅黑的界面变体
+        QStringLiteral("Microsoft JhengHei"),   // Windows：繁体中文
+        QStringLiteral("Meiryo"),               // Windows：日文
+        QStringLiteral("Malgun Gothic"),        // Windows：韩文
+        QStringLiteral("Noto Sans CJK SC"),     // 思源黑体：简体
+        QStringLiteral("Noto Sans CJK TC"),     // 思源黑体：繁体
+        QStringLiteral("Noto Sans CJK JP"),     // 思源黑体：日文
+        QStringLiteral("Noto Sans CJK KR"),     // 思源黑体：韩文
+        QStringLiteral("Source Han Sans SC"),
+        QStringLiteral("WenQuanYi Micro Hei"),
+        QStringLiteral("WenQuanYi Zen Hei"),
+        QStringLiteral("Droid Sans Fallback"),
+        QStringLiteral("PingFang SC"),          // macOS
+        QStringLiteral("Hiragino Sans GB"),
+        QStringLiteral("Heiti SC"),
+        QStringLiteral("sans-serif"),           // 通用兜底
+    };
+
+    for (const QString &candidate : candidates)
+    {
+        if (!families.contains(candidate))
+            families << candidate;
+    }
+
+    return families;
+}
+
+// 把回退家族写回字体对象。家族列表是 Qt 5.13 才有的 API，更老的版本只能沿用
+// .ui 里写死的单一家族（此时字体替换仍交由平台字体库处理，与改动前一致）。
+void applyFamiliesToFont(QFont &font, const QStringList &families)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
+    font.setFamilies(families);
+#else
+    Q_UNUSED(font)
+    Q_UNUSED(families)
+#endif
+}
+
+// 应用到主窗口：其子控件与子对话框沿父链继承该字体
+void applyUiFont(QWidget *widget)
+{
+    QFont font = widget->font();
+    applyFamiliesToFont(font, uiFontFamilies(font));
+    widget->setFont(font);
+}
+
+}
+
+// 应用到应用级字体：QToolTip 等顶层控件不继承主窗口字体，只有应用字体能覆盖到。
+void NineChessWindow::applyApplicationFontFallback()
+{
+    QFont appFont = QApplication::font();
+    applyFamiliesToFont(appFont, uiFontFamilies(appFont));
+    QApplication::setFont(appFont);
 }
 
 NineChessWindow::NineChessWindow(QWidget *parent)
@@ -270,6 +345,8 @@ NineChessWindow::NineChessWindow(QWidget *parent)
     initializeLanguage();
 
     ui.setupUi(this);
+    // 给 .ui 指定的中文字体补上跨平台回退家族（子控件与子对话框沿父链继承）
+    applyUiFont(this);
     // 标题栏显示版本号（版本号唯一来源见 ninechess_version.h）
     setWindowTitle(tr("九连棋 v%1").arg(QString::fromLatin1(NINECHESS_VERSION_SHORT)));
     //去掉标题栏
@@ -692,15 +769,11 @@ void NineChessWindow::ruleInfo()
 
     const int s = game->getStepsLimit();
     const int t = game->getTimeLimit();
-    QString tl = tr(" 不限时");
-    QString sl = tr(" 不限步");
-    if (s > 0)
-        sl = tr(" 限%1步").arg(s);
-    if (t > 0)
-        tl = tr(" 限时%1分").arg(t);
+    const QString stepsText = s > 0 ? tr(" 限%1步").arg(s) : tr(" 不限步");
+    const QString timeText = t > 0 ? tr(" 限时%1分").arg(t) : tr(" 不限时");
 
     // 规则显示
-    ui.labelRule->setText(tl + sl);
+    ui.labelRule->setText(stepsText + timeText);
     // 规则提示：规则名与说明是模型层的常量文本，统一使用 "NineChess" 上下文翻译
     const QString ruleName = QCoreApplication::translate("NineChess", NineChess::rules[ruleNo].name);
     const QString ruleDescription = QCoreApplication::translate("NineChess", NineChess::rules[ruleNo].description);

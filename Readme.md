@@ -5,10 +5,6 @@
 ## Language
 The program supports Simplified Chinese, Traditional Chinese, English, Japanese, Korean, German, French, Russian, Spanish and Portuguese; it follows your system locale on first launch and can be switched at any time under "Options → Settings → Language".
 
-- Translation sources: `NineChess/translations/ninechess_<code>.ts`, refreshed with `lupdate` and compiled with `lrelease` into `.qm`; the `.qm` files are packed into the executable under the `/i18n` prefix through `ninechesswindow.qrc`, so they ship inside `NineChess.exe` and need no extra files.
-- Qt's own widgets (standard dialog buttons and the like) are translated by `qtbase_<code>.qm` taken from the Qt installation or the release folder; when it is absent those controls stay in English while the program's own text is still translated.
-- The game model does not link Qt: rule names, rule descriptions and status-bar tips are handed to the UI through an injectable hook (`NineChess::setTextTranslator`, context `"NineChess"`), and tips are stored as templates plus `%1`..`%9` arguments, so switching language refreshes them immediately without replaying the game. `NineChessConsole` installs no hook and therefore keeps printing the original Chinese source text.
-
 ## Project
 `NineChess` is a Nine Men's Morris family game written in Qt. This repository contains both the GUI application `NineChess` and the command-line test harness `NineChessConsole`.
 The core code is now organised as "pure game model + controller-level match management + bitboard Alpha-Beta AI", which makes it easier to extend rules, debug the AI and run regression tests.
@@ -189,6 +185,18 @@ The project roughly follows MVC:
 
 - The GUI project also keeps `NineChess/ninechess.pro`.
 - `/utf-8` is added explicitly for MSVC so that UTF-8 sources without BOM are not misread as the local code page.
+- The project asks for `c++17`; note that qmake only recognises the lowercase `c++NN` spelling.
+
+### Linux / Debian
+
+- The qmake project targets Qt 5 (the Windows build uses Qt 5.15.2), and Debian 11/12/13 ship Qt 5.15, so the distribution packages are enough. Qt 6 does not compile: three Qt 5-only APIs are used (`QDesktopWidget` / `qApp->desktop()`, `QString::SkipEmptyParts`, `QTextStream::setCodec`).
+- Dependencies:
+  `sudo apt install build-essential qtbase5-dev qtbase5-dev-tools qttools5-dev-tools qtmultimedia5-dev libqt5multimedia5-plugins qttranslations5-l10n fonts-noto-cjk`
+  `libqt5multimedia5-plugins` is the backend that actually plays the `QSoundEffect` samples, `qttranslations5-l10n` supplies the `qtbase_<code>.qm` catalogues for Qt's own widgets, and `fonts-noto-cjk` covers the Chinese/Japanese/Korean UI text.
+- Build: `cd NineChess && qmake && make -j`
+- Interface font: `Microsoft YaHei` on Windows, extended with cross-platform fallback families (`Noto Sans CJK`, `WenQuanYi`, `Malgun Gothic`, `PingFang SC`, ...) — see `uiFontFamilies()` in `NineChess/src/ninechesswindow.cpp`. With no CJK font installed the UI ends up on `sans-serif` and may show empty boxes.
+- `NineChessConsole` and the benchmark drivers are built on Linux by `bash benchmark/linux/build.sh` (g++, with the `windows.h` / `direct.h` shims under `benchmark/linux/`).
+- `tests/*.ps1` are Windows-only PowerShell scripts.
 
 ## Encoding And Text Format
 

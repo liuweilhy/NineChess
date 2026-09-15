@@ -195,7 +195,7 @@
     <message>
         <location filename="../src/ninechesswindow.cpp" line="274"/>
         <location filename="../src/ninechesswindow.cpp" line="476"/>
-        <location filename="../src/ninechesswindow.cpp" line="1208"/>
+        <location filename="../src/ninechesswindow.cpp" line="1204"/>
         <source>九连棋 v%1</source>
         <translation>NineChess v%1</translation>
     </message>
@@ -206,152 +206,152 @@
         <translation>Idioma</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="695"/>
+        <location filename="../src/ninechesswindow.cpp" line="696"/>
         <source> 不限时</source>
-        <translation> Sin límite de tiempo</translation>
+        <translation> ∞ min</translation>
+    </message>
+    <message>
+        <location filename="../src/ninechesswindow.cpp" line="695"/>
+        <source> 不限步</source>
+        <translation> ∞ jugadas</translation>
+    </message>
+    <message>
+        <location filename="../src/ninechesswindow.cpp" line="695"/>
+        <source> 限%1步</source>
+        <translation> %1 jugadas</translation>
     </message>
     <message>
         <location filename="../src/ninechesswindow.cpp" line="696"/>
-        <source> 不限步</source>
-        <translation> Sin límite de jugadas</translation>
-    </message>
-    <message>
-        <location filename="../src/ninechesswindow.cpp" line="698"/>
-        <source> 限%1步</source>
-        <translation> Máx. %1 jugadas</translation>
-    </message>
-    <message>
-        <location filename="../src/ninechesswindow.cpp" line="700"/>
         <source> 限时%1分</source>
-        <translation> Límite %1 min</translation>
+        <translation> %1 min</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="725"/>
+        <location filename="../src/ninechesswindow.cpp" line="721"/>
         <source>步数和时间限制</source>
         <translation>Límites de jugadas y tiempo</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="743"/>
+        <location filename="../src/ninechesswindow.cpp" line="739"/>
         <source>超出限制步数判和：</source>
         <translation>Tablas al superar el límite de jugadas:</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="744"/>
+        <location filename="../src/ninechesswindow.cpp" line="740"/>
         <source>任意一方超时判负：</source>
         <translation>Derrota si cualquier bando agota su tiempo:</translation>
     </message>
     <message>
+        <location filename="../src/ninechesswindow.cpp" line="741"/>
         <location filename="../src/ninechesswindow.cpp" line="745"/>
-        <location filename="../src/ninechesswindow.cpp" line="749"/>
         <source>无限制</source>
         <translation>Sin límite</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="746"/>
+        <location filename="../src/ninechesswindow.cpp" line="742"/>
         <source>50步</source>
         <translation>50 jugadas</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="747"/>
+        <location filename="../src/ninechesswindow.cpp" line="743"/>
         <source>100步</source>
         <translation>100 jugadas</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="748"/>
+        <location filename="../src/ninechesswindow.cpp" line="744"/>
         <source>200步</source>
         <translation>200 jugadas</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="750"/>
+        <location filename="../src/ninechesswindow.cpp" line="746"/>
         <source>5分钟</source>
         <translation>5 minutos</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="751"/>
+        <location filename="../src/ninechesswindow.cpp" line="747"/>
         <source>10分钟</source>
         <translation>10 minutos</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="752"/>
+        <location filename="../src/ninechesswindow.cpp" line="748"/>
         <source>20分钟</source>
         <translation>20 minutos</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="757"/>
-        <location filename="../src/ninechesswindow.cpp" line="1143"/>
+        <location filename="../src/ninechesswindow.cpp" line="753"/>
+        <location filename="../src/ninechesswindow.cpp" line="1139"/>
         <source>确定</source>
         <translation>Aceptar</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="758"/>
-        <location filename="../src/ninechesswindow.cpp" line="1144"/>
+        <location filename="../src/ninechesswindow.cpp" line="754"/>
+        <location filename="../src/ninechesswindow.cpp" line="1140"/>
         <source>取消</source>
         <translation>Cancelar</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="831"/>
+        <location filename="../src/ninechesswindow.cpp" line="827"/>
         <source>打开棋谱文件</source>
         <translation>Abrir registro de partida</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="843"/>
+        <location filename="../src/ninechesswindow.cpp" line="839"/>
         <source>文件过大</source>
         <translation>Archivo demasiado grande</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="843"/>
+        <location filename="../src/ninechesswindow.cpp" line="839"/>
         <source>不支持1MB以上文件</source>
         <translation>No se admiten archivos de más de 1 MB</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="883"/>
+        <location filename="../src/ninechesswindow.cpp" line="879"/>
         <source>文件错误</source>
         <translation>Error de archivo</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="883"/>
+        <location filename="../src/ninechesswindow.cpp" line="879"/>
         <source>不是正确的棋谱文件</source>
         <translation>No es un archivo de partida válido</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="957"/>
+        <location filename="../src/ninechesswindow.cpp" line="953"/>
         <source>棋谱.txt</source>
-        <translation>棋谱.txt</translation>
+        <translation>Partida.txt</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="959"/>
+        <location filename="../src/ninechesswindow.cpp" line="955"/>
         <source>保存棋谱文件</source>
         <translation>Guardar registro de partida</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1101"/>
+        <location filename="../src/ninechesswindow.cpp" line="1097"/>
         <source>AI设置</source>
         <translation>Ajustes de IA</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1125"/>
+        <location filename="../src/ninechesswindow.cpp" line="1121"/>
         <source>玩家1 AI设置</source>
         <translation>Ajustes de IA del jugador 1</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1126"/>
-        <location filename="../src/ninechesswindow.cpp" line="1134"/>
+        <location filename="../src/ninechesswindow.cpp" line="1122"/>
+        <location filename="../src/ninechesswindow.cpp" line="1130"/>
         <source>深度</source>
         <translation>Profundidad</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1129"/>
-        <location filename="../src/ninechesswindow.cpp" line="1137"/>
+        <location filename="../src/ninechesswindow.cpp" line="1125"/>
+        <location filename="../src/ninechesswindow.cpp" line="1133"/>
         <source>限时(秒)</source>
         <translation>Tiempo (s)</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1133"/>
+        <location filename="../src/ninechesswindow.cpp" line="1129"/>
         <source>玩家2 AI设置</source>
         <translation>Ajustes de IA del jugador 2</translation>
     </message>
     <message>
-        <location filename="../src/ninechesswindow.cpp" line="1228"/>
+        <location filename="../src/ninechesswindow.cpp" line="1224"/>
         <source>NineChess v%1</source>
         <translation>NineChess v%1</translation>
     </message>
@@ -481,12 +481,12 @@
     <message>
         <location filename="../ninechesswindow.ui" line="568"/>
         <source>顺时针旋转90°(&amp;R)</source>
-        <translation>Girar 90° en sentido &amp;horario</translation>
+        <translation>&amp;Girar 90° en sentido horario</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="571"/>
         <source>顺时针旋转90°(R)</source>
-        <translation>Girar 90° en sentido horario (R)</translation>
+        <translation>Girar 90° en sentido horario (G)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="580"/>
@@ -496,7 +496,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="583"/>
         <source>逆时针旋转90°(L)</source>
-        <translation>Girar 90° en sentido antihorario (L)</translation>
+        <translation>Girar 90° en sentido antihorario (A)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="598"/>
@@ -511,7 +511,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="610"/>
         <source>初始局面(S)</source>
-        <translation>Posición inicial (S)</translation>
+        <translation>Posición inicial (I)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="613"/>
@@ -536,7 +536,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="637"/>
         <source>后一招(F)</source>
-        <translation>Jugada siguiente (F)</translation>
+        <translation>Jugada siguiente (G)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="640"/>
@@ -556,12 +556,12 @@
     <message>
         <location filename="../ninechesswindow.ui" line="664"/>
         <source>自动演示(&amp;A)</source>
-        <translation>Reproducción &amp;automática</translation>
+        <translation>&amp;Reproducción automática</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="667"/>
         <source>自动演示(A)</source>
-        <translation>Reproducción automática (A)</translation>
+        <translation>Reproducción automática (R)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="676"/>
@@ -596,7 +596,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="723"/>
         <source>网络对战(I)</source>
-        <translation>Partida en red (I)</translation>
+        <translation>Partida en red (R)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="732"/>
@@ -606,7 +606,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="735"/>
         <source>引擎设置(E)</source>
-        <translation>Ajustes del motor (E)</translation>
+        <translation>Ajustes del motor (M)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="750"/>
@@ -616,7 +616,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="753"/>
         <source>电脑执先手(T)</source>
-        <translation>La computadora juega primero (T)</translation>
+        <translation>La computadora juega primero (P)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="765"/>
@@ -626,7 +626,7 @@
     <message>
         <location filename="../ninechesswindow.ui" line="768"/>
         <source>电脑执白(R)</source>
-        <translation>La computadora juega con blancas (R)</translation>
+        <translation>La computadora juega con blancas (G)</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="777"/>
@@ -651,12 +651,12 @@
     <message>
         <location filename="../ninechesswindow.ui" line="824"/>
         <source>落子音效(&amp;S)</source>
-        <translation>Sonido de juga&amp;das</translation>
+        <translation>&amp;Efectos de sonido</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="835"/>
         <source>落子动画(&amp;A)</source>
-        <translation>Animación de juga&amp;das</translation>
+        <translation>&amp;Animación de jugadas</translation>
     </message>
     <message>
         <location filename="../ninechesswindow.ui" line="838"/>

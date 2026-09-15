@@ -339,4 +339,4 @@ benchmark/**/rule*_g*.txt
 books/*.dat
 
 # 本地随手保存的棋谱样本，不入库
-/棋谱1.txt
+/*棋谱*.txt

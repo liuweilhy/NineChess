@@ -5,10 +5,6 @@
 ## 语言
 本程序支持简体中文、繁体中文、英语、日语、韩语、德语、法语、俄语、西班牙语、葡萄牙语；首次启动按本机默认语言显示，之后可在主窗口“选项 → 设置 → 语言”中随时切换。
 
-- 译文源文件为 `NineChess/translations/ninechess_<语言代码>.ts`，用 `lupdate` 更新、`lrelease` 编译成 `.qm`；`.qm` 由 `ninechesswindow.qrc` 以 `/i18n` 前缀打包进可执行文件，因此随 `NineChess.exe` 一起分发，无需额外文件。
-- Qt 自带控件（标准对话框按钮等）由 Qt 安装目录或发布目录中的 `qtbase_<语言代码>.qm` 翻译；该文件缺失时这些控件保持英文，程序自身文本不受影响。
-- 模型层不依赖 Qt：规则名、规则说明与状态栏提示通过可注入的翻译钩子输出（`NineChess::setTextTranslator`，翻译上下文 `"NineChess"`），提示文本按“模板 + `%1`..`%9` 实参”保存，因此切换语言无需重走棋步即可立即刷新。`NineChessConsole` 不注入钩子，仍输出原始中文源文本。
-
 ## 项目
 `NineChess` 是一个以 Qt 编写的九子棋类游戏项目，当前仓库同时包含图形界面程序 `NineChess` 和命令行测试程序 `NineChessConsole`。
 现版本的核心代码已经整理为“纯棋局模型 + 控制层赛制管理 + 位棋盘 Alpha-Beta AI”的结构，更适合继续扩展规则、调试 AI 和做回归测试。
@@ -194,6 +190,18 @@ r2s100t10
 
 - GUI 工程同时保留 `NineChess/ninechess.pro`。
 - 对 MSVC 已显式追加 `/utf-8`，避免无 BOM 的 UTF-8 源码被误判为本地代码页。
+- 工程要求 `c++17`；注意 qmake 只识别小写的 `c++NN` 写法。
+
+### Linux / Debian
+
+- qmake 工程面向 Qt 5（Windows 侧使用 Qt 5.15.2），Debian 11/12/13 自带的 Qt 5.15 即可满足，无需自行编译 Qt。Qt 6 无法编译：代码中有三处 Qt 5 专有 API（`QDesktopWidget` / `qApp->desktop()`、`QString::SkipEmptyParts`、`QTextStream::setCodec`）。
+- 依赖包：
+  `sudo apt install build-essential qtbase5-dev qtbase5-dev-tools qttools5-dev-tools qtmultimedia5-dev libqt5multimedia5-plugins qttranslations5-l10n fonts-noto-cjk`
+  其中 `libqt5multimedia5-plugins` 是 `QSoundEffect` 真正出声所需的后端，`qttranslations5-l10n` 提供 Qt 自带控件的 `qtbase_<code>.qm`，`fonts-noto-cjk` 覆盖中日韩界面文字。
+- 构建：`cd NineChess && qmake && make -j`
+- 界面字体：Windows 下为 `Microsoft YaHei`，并追加了跨平台回退家族（`Noto Sans CJK`、`WenQuanYi`、`Malgun Gothic`、`PingFang SC` 等），见 `NineChess/src/ninechesswindow.cpp` 的 `uiFontFamilies()`；系统里一个中日韩字体都没有时会退到 `sans-serif`，可能显示方框。
+- `NineChessConsole` 与 benchmark 驱动在 Linux 下用 `bash benchmark/linux/build.sh` 构建（g++，`benchmark/linux/` 下提供了 `windows.h` / `direct.h` 垫片）。
+- `tests/*.ps1` 是 Windows 专用的 PowerShell 脚本。
 
 ## 编码与文本格式
 

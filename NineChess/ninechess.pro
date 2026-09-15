@@ -12,7 +12,9 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 TARGET = NineChess
 TEMPLATE = app
 
-CONFIG += C++11 \
+# c++17：核心用到 std::make_unique（C++14），且 qmake 只识别小写的 c++NN，
+# 原来的 C++11 既不会被识别、又会与 MSVC/GCC 的默认标准产生歧义，故作显式指定。
+CONFIG += c++17 \
     warn_off
 INCLUDEPATH += src
 

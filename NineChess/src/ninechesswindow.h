@@ -20,6 +20,11 @@ public:
     NineChessWindow(QWidget *parent = nullptr);
     ~NineChessWindow();
 
+    // 界面字体：为 .ui 里写死的中文字体补上跨平台的回退家族。
+    // 应用级字体必须在创建窗口之前设置——QToolTip 之类的顶层控件不继承主窗口
+    // 字体，只有应用字体能覆盖到，因此由 main() 调用本静态方法。
+    static void applyApplicationFontFallback();
+
 protected:
     bool eventFilter(QObject * watched, QEvent * event);
     void closeEvent(QCloseEvent *event);
