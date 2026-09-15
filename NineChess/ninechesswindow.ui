@@ -769,15 +769,12 @@
    </property>
   </action>
   <action name="actionSetting_O">
-   <property name="enabled">
-    <bool>false</bool>
-   </property>
    <property name="icon">
     <iconset resource="ninechesswindow.qrc">
      <normaloff>:/icon/resources/icon/PrimaryKeyHS.png</normaloff>:/icon/resources/icon/PrimaryKeyHS.png</iconset>
    </property>
    <property name="text">
-    <string>设置(&amp;O)...</string>
+    <string>设置(&amp;O)</string>
    </property>
   </action>
   <action name="actionToolBar_T">

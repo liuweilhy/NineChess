@@ -232,6 +232,7 @@
     <ClInclude Include="src\ninechess_book.h" />
     <ClInclude Include="src\ninechess_common.h" />
     <ClInclude Include="src\ninechess_symmetry.h" />
+    <ClInclude Include="src\ninechess_version.h" />
     <QtMoc Include="src\ninechesswindow.h" />
     <QtMoc Include="src\pieceitem.h" />
   </ItemGroup>
@@ -292,6 +293,30 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NineChess.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 界面翻译：.ts 为译文源文件，.qm 为 lrelease 产物并被 ninechesswindow.qrc 打包。
+         修改 .ts 后需重新执行 lrelease 生成 .qm。 -->
+    <None Include="translations\ninechess_zh_CN.ts" />
+    <None Include="translations\ninechess_zh_TW.ts" />
+    <None Include="translations\ninechess_en.ts" />
+    <None Include="translations\ninechess_ja.ts" />
+    <None Include="translations\ninechess_ko.ts" />
+    <None Include="translations\ninechess_de.ts" />
+    <None Include="translations\ninechess_fr.ts" />
+    <None Include="translations\ninechess_ru.ts" />
+    <None Include="translations\ninechess_es.ts" />
+    <None Include="translations\ninechess_pt.ts" />
+    <None Include="translations\ninechess_zh_CN.qm" />
+    <None Include="translations\ninechess_zh_TW.qm" />
+    <None Include="translations\ninechess_en.qm" />
+    <None Include="translations\ninechess_ja.qm" />
+    <None Include="translations\ninechess_ko.qm" />
+    <None Include="translations\ninechess_de.qm" />
+    <None Include="translations\ninechess_fr.qm" />
+    <None Include="translations\ninechess_ru.qm" />
+    <None Include="translations\ninechess_es.qm" />
+    <None Include="translations\ninechess_pt.qm" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />

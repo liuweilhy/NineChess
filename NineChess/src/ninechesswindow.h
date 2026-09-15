@@ -9,6 +9,8 @@
 
 class GameScene;
 class GameController;
+class QMenu;
+class QTranslator;
 
 class NineChessWindow : public QMainWindow
 {
@@ -22,6 +24,8 @@ protected:
     bool eventFilter(QObject * watched, QEvent * event);
     void closeEvent(QCloseEvent *event);
     void showEvent(QShowEvent *event);
+    // 语言切换时 Qt 会投递 LanguageChange 事件，在这里统一刷新界面文本
+    void changeEvent(QEvent *event);
 
 private slots:
     // 初始化
@@ -30,6 +34,8 @@ private slots:
     void actionRules_triggered();
     // 更新规则标签
     void ruleInfo();
+    // 语言菜单项被选中
+    void actionLanguageChanged();
     // 自动运行定时处理函数
     void onAutoRunTimeOut(QPrivateSignal signal);
 
@@ -68,6 +74,21 @@ private slots:
     void on_actionAbout_A_triggered();
 
 private:
+    // ==================== 界面语言 ====================
+    // 语言相关的状态与行为都收在本类内：翻译器由本窗口持有并随窗口销毁，
+    // 不再有模块级全局状态。语言清单、Locale 归一化等纯查表函数放在
+    // ninechesswindow.cpp 的文件内静态函数中（不进入头文件）。
+    //
+    // 装载/切换界面语言。必须在 ui.setupUi() 之前调用：
+    // 优先沿用上次选择（QSettings），首次运行按本机默认语言。
+    void initializeLanguage();
+    // 装载指定语言；找不到翻译文件时返回 false 并保持当前语言不变
+    bool applyLanguage(const QString &code);
+    // 建立“选项 -> 设置 -> 语言”子菜单
+    void createLanguageMenu();
+    // 按当前语言刷新所有界面文本（含动态创建的菜单项）
+    void retranslateUi();
+
     // 界面文件
     Ui::NineChessWindowClass ui;
     // 把当前对局写入已关联的棋谱文件（含规则/限时限步头部；终局时含胜负平结果）
@@ -88,5 +109,12 @@ private:
     bool listWidthClamped = true;
     // 棋谱模型新插入行尚未写入数据的标志（追加招法后自动选中最后一行用）
     bool newManualRow = false;
+    // 语言子菜单（挂在“选项 -> 设置”项下）
+    QMenu *languageMenu = nullptr;
+    // 本程序翻译与 Qt 自带翻译（qtbase_*.qm）；随窗口一起销毁
+    QTranslator *appTranslator = nullptr;
+    QTranslator *qtTranslator = nullptr;
+    // 当前生效的语言代码（如 "zh_CN"、"en"）
+    QString languageCode;
 };
 

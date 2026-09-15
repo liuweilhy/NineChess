@@ -23,11 +23,210 @@
 #include <QPicture>
 #include <QDebug>
 #include <QDesktopWidget>
+#include <QActionGroup>
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QEvent>
+#include <QLibraryInfo>
+#include <QLocale>
+#include <QMenu>
+#include <QTranslator>
+#include <QVector>
 #include "ninechesswindow.h"
 #include "gamecontroller.h"
 #include "gamescene.h"
+#include "ninechess.h"
+#include "ninechess_version.h"
 
 namespace {
+
+// ==================== 界面语言 ====================
+// 说明：语言清单、Locale 归一化、翻译文件查找属于纯查表逻辑，
+// 放在文件内（编译单元内）即可，无需暴露到头文件。
+
+// 一种受支持的语言：code 同时决定翻译文件名后缀（ninechess_<code>.qm）；
+// nativeName 是该语言自身的写法，菜单中直接显示，不参与翻译。
+struct LanguageOption
+{
+    const char *code;
+    const char *nativeName;
+};
+
+// 内置支持的语言。顺序即语言菜单顺序：先中文（简/繁），再英文，
+// 之后按使用规模与字母顺序排列。
+const LanguageOption kLanguages[] = {
+    { "zh_CN", "简体中文" },
+    { "zh_TW", "繁體中文" },
+    { "en",    "English" },
+    { "ja",    "日本語" },
+    { "ko",    "한국어" },
+    { "de",    "Deutsch" },
+    { "fr",    "Français" },
+    { "ru",    "Русский" },
+    { "es",    "Español" },
+    { "pt",    "Português" },
+};
+
+const int kLanguageCount = static_cast<int>(sizeof(kLanguages) / sizeof(kLanguages[0]));
+
+// 该语言自身的名称；未知代码原样返回。
+QString languageNativeName(const QString &code)
+{
+    for (int i = 0; i < kLanguageCount; ++i) {
+        if (code == QLatin1String(kLanguages[i].code))
+            return QString::fromUtf8(kLanguages[i].nativeName);
+    }
+    return code;
+}
+
+bool isSupportedLanguage(const QString &code)
+{
+    for (int i = 0; i < kLanguageCount; ++i) {
+        if (code == QLatin1String(kLanguages[i].code))
+            return true;
+    }
+    return false;
+}
+
+// 把任意 Locale 名称归一化为受支持的语言代码；无法识别时返回 "en"。
+// 中文会区分简体（zh_CN）与繁体（zh_TW）。
+QString normalizeLanguageCode(const QString &localeName)
+{
+    QString name = localeName;
+    name.replace(QLatin1Char('-'), QLatin1Char('_'));
+
+    const QStringList parts = name.split(QLatin1Char('_'), QString::SkipEmptyParts);
+    if (parts.isEmpty())
+        return QStringLiteral("en");
+
+    const QString lang = parts.at(0).toLower();
+    const QString region = parts.size() > 1 ? parts.at(1).toUpper() : QString();
+
+    if (lang == QLatin1String("zh")) {
+        // 繁体：显式 Hant 标记，或使用台/港/澳区域；
+        // 其余（含 Hans、CN、SG 以及无法判定区域）一律按简体处理。
+        if (region.contains(QLatin1String("HANT"))
+            || region == QLatin1String("TW")
+            || region == QLatin1String("HK")
+            || region == QLatin1String("MO")) {
+            return QStringLiteral("zh_TW");
+        }
+        return QStringLiteral("zh_CN");
+    }
+
+    if (isSupportedLanguage(lang))
+        return lang;
+
+    return QStringLiteral("en");
+}
+
+// 本机默认语言代码。
+//   - Windows：QLocale::system() 读系统区域设置；
+//   - Debian/Linux：QLocale 读 LC_ALL / LC_MESSAGES / LANG，另外下面还会
+//     在 QLocale 退化为 "C"/"POSIX" 时显式读一次环境变量做兜底。
+QString systemLanguageCode()
+{
+    QString name = QLocale::system().name();
+
+    if (name.isEmpty() || name == QLatin1String("C") || name == QLatin1String("POSIX")) {
+        static const char *const kEnvNames[] = { "LC_ALL", "LC_MESSAGES", "LANG" };
+        for (const char *envName : kEnvNames) {
+            const QByteArray value = qgetenv(envName);
+            if (value.isEmpty())
+                continue;
+
+            // 去掉 "zh_CN.UTF-8@variant" 中的编码与修饰部分
+            QString candidate = QString::fromLocal8Bit(value);
+            const int dot = candidate.indexOf(QLatin1Char('.'));
+            if (dot >= 0)
+                candidate.truncate(dot);
+            const int at = candidate.indexOf(QLatin1Char('@'));
+            if (at >= 0)
+                candidate.truncate(at);
+            if (candidate.isEmpty()
+                || candidate == QLatin1String("C")
+                || candidate == QLatin1String("POSIX")) {
+                continue;
+            }
+
+            name = candidate;
+            break;
+        }
+    }
+
+    return normalizeLanguageCode(name);
+}
+
+// 本程序翻译文件的搜索目录：优先打包进可执行文件的资源（ninechesswindow.qrc），
+// 其次可执行文件旁的 translations 目录（便于替换或新增语言而无需重编译）。
+QStringList translationSearchDirs()
+{
+    QStringList dirs;
+    dirs << QStringLiteral(":/i18n");
+    dirs << QCoreApplication::applicationDirPath() + QStringLiteral("/translations");
+    dirs << QCoreApplication::applicationDirPath();
+    return dirs;
+}
+
+// 模型层（ninechess.cpp / gamecontroller.cpp）中的规则名、规则说明和状态栏提示
+// 不是 tr() 字面量调用（规则表是常量数组，提示是运行期拼装的），lupdate 无法
+// 自动提取，因此在这里用 QT_TRANSLATE_NOOP 在 "NineChess" 上下文下登记一次。
+// 这里的文本必须与模型层保持一致，否则翻译不会命中。
+void registerModelTranslatableTexts()
+{
+    // ---- 规则名（NineChess::rules[i].name）----
+    QT_TRANSLATE_NOOP("NineChess", "成三棋");
+    QT_TRANSLATE_NOOP("NineChess", "打三棋(12连棋)");
+    QT_TRANSLATE_NOOP("NineChess", "九连棋");
+    QT_TRANSLATE_NOOP("NineChess", "莫里斯九子棋");
+
+    // ---- 规则说明（NineChess::rules[i].description）----
+    QT_TRANSLATE_NOOP("NineChess",
+        "1. 双方各9颗子，开局依次摆子；\n"
+        "2. 凡出现三子相连，就提掉对手一子；\n"
+        "3. 不能提对手的“三连”子，除非无子可提；\n"
+        "4. 同时出现两个“三连”只能提一子；\n"
+        "5. 摆完后依次走子，每次只能往相邻位置走一步；\n"
+        "6. 把对手棋子提到少于3颗时胜利；\n"
+        "7. 走棋阶段不能行动（被“闷”）算负。");
+    QT_TRANSLATE_NOOP("NineChess",
+        "1. 双方各12颗子，棋盘有斜线；\n"
+        "2. 摆棋阶段被提子的位置不能再摆子，直到走棋阶段；\n"
+        "3. 摆棋阶段，摆满棋盘算先手负；\n"
+        "4. 走棋阶段，后摆棋的一方先走；\n"
+        "5. 一步出现几个“三连”就可以提几个子；\n"
+        "6. 其它规则与成三棋基本相同。");
+    QT_TRANSLATE_NOOP("NineChess",
+        "1. 规则与成三棋基本相同，只是它的棋子有序号，\n"
+        "2. 相同序号、位置的“三连”不能重复提子；\n"
+        "3. 走棋阶段不能行动（被“闷”），则由对手继续走棋；\n"
+        "4. 一步出现几个“三连”就可以提几个子。");
+    QT_TRANSLATE_NOOP("NineChess",
+        "规则与成三棋基本相同，只是在走子阶段，当一方仅剩3子时，他可以飞子到任意空位。");
+
+    // ---- 状态栏提示（NineChess::m_tip 模板）----
+    QT_TRANSLATE_NOOP("NineChess", "未开局");
+    QT_TRANSLATE_NOOP("NineChess", "玩家1");
+    QT_TRANSLATE_NOOP("NineChess", "玩家2");
+    QT_TRANSLATE_NOOP("NineChess", "轮到%1落子，剩余%2子");
+    QT_TRANSLATE_NOOP("NineChess", "轮到%1去子，需去%2子");
+    QT_TRANSLATE_NOOP("NineChess", "轮到%1选子移动");
+    QT_TRANSLATE_NOOP("NineChess", "轮到%1落子");
+    QT_TRANSLATE_NOOP("NineChess", "平局。");
+    QT_TRANSLATE_NOOP("NineChess", "恭喜玩家1获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "恭喜玩家2获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "玩家1认负，恭喜玩家2获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "玩家2认负，恭喜玩家1获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "摆满棋盘，恭喜玩家2获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "摆满棋盘，双方平局。");
+    QT_TRANSLATE_NOOP("NineChess", "玩家1无子可走，恭喜玩家2获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "玩家2无子可走，恭喜玩家1获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "双方均无子可走，平局。");
+    QT_TRANSLATE_NOOP("NineChess", "玩家1超时，恭喜玩家2获胜！");
+    QT_TRANSLATE_NOOP("NineChess", "玩家2超时，恭喜玩家1获胜！");
+}
+
+// ==================== 手工指定路径等辅助 ====================
 
 QString defaultManualDirectory()
 {
@@ -67,7 +266,12 @@ NineChessWindow::NineChessWindow(QWidget *parent)
     ruleNo(-1),
     autoRunTimer(this)
 {
+    // 语言必须在 setupUi 之前装载：否则 .ui 里的初始文本会停留在源语言（中文）
+    initializeLanguage();
+
     ui.setupUi(this);
+    // 标题栏显示版本号（版本号唯一来源见 ninechess_version.h）
+    setWindowTitle(tr("九连棋 v%1").arg(QString::fromLatin1(NINECHESS_VERSION_SHORT)));
     //去掉标题栏
     //setWindowFlags(Qt::FramelessWindowHint);
     //设置透明(窗体标题栏不透明,背景透明，如果不去掉标题栏，背景就变为黑色)
@@ -91,7 +295,9 @@ NineChessWindow::NineChessWindow(QWidget *parent)
 
     // 因功能限制，使部分功能不可用，将来再添加
     ui.actionInternet_I->setDisabled(true);
-    ui.actionSetting_O->setDisabled(true);
+
+    // “选项 -> 设置”原本是不可用的占位项，现在把语言子菜单挂在它下面
+    createLanguageMenu();
 
     // 初始化游戏规则菜单
     ui.menu_R->installEventFilter(this);
@@ -117,6 +323,176 @@ NineChessWindow::~NineChessWindow()
         game->deleteLater();
     }
     qDeleteAll(ruleActionList);
+
+    // 翻译器由本窗口持有，销毁前先从 QCoreApplication 卸载，
+    // 避免应用继续持有已释放的对象
+    if (appTranslator) {
+        QCoreApplication::removeTranslator(appTranslator);
+        delete appTranslator;
+        appTranslator = nullptr;
+    }
+    if (qtTranslator) {
+        QCoreApplication::removeTranslator(qtTranslator);
+        delete qtTranslator;
+        qtTranslator = nullptr;
+    }
+}
+
+// 装载界面语言：注册模型层文本钩子并决定启动语言。
+// 必须在 ui.setupUi() 之前调用，否则 .ui 里的初始文本会是源语言（中文）。
+void NineChessWindow::initializeLanguage()
+{
+    // 登记模型层的规则名/规则说明/状态栏提示，供 lupdate 提取
+    registerModelTranslatableTexts();
+
+    // 纯模型层不依赖 Qt，其提示文本通过钩子参与翻译。
+    // 钩子无捕获，进程内注册一次即可。
+    NineChess::setTextTranslator([](const std::string &source) {
+        return QCoreApplication::translate("NineChess", source.c_str()).toStdString();
+    });
+
+    // 优先沿用上次选择的语言；首次运行（或未记录）时按本机默认语言启动
+    QSettings settings(QStringLiteral("NineChess"), QStringLiteral("NineChess"));
+    QString code = settings.value(QStringLiteral("ui/language")).toString();
+    if (code.isEmpty())
+        code = systemLanguageCode();
+
+    if (!applyLanguage(code) && code != QLatin1String("en"))
+        applyLanguage(QStringLiteral("en"));
+}
+
+bool NineChessWindow::applyLanguage(const QString &code)
+{
+    const QString normalized = normalizeLanguageCode(code);
+    const QString fileName = QStringLiteral("ninechess_") + normalized;
+
+    // 先把新翻译读进来；全部失败时保持当前语言不动
+    QTranslator *newAppTranslator = new QTranslator;
+    bool loaded = false;
+    const QStringList dirs = translationSearchDirs();
+    for (const QString &dir : dirs) {
+        if (newAppTranslator->load(fileName, dir)) {
+            loaded = true;
+            break;
+        }
+    }
+    if (!loaded) {
+        // 资源路径或 .qm 缺失都会走到这里；打印出来避免"选了语言却没反应"无从排查
+        // （资源内路径应为 :/i18n/ninechess_<code>.qm，见 ninechesswindow.qrc 的 alias）
+        qWarning("NineChess: cannot load translation '%s' (searched :/i18n and application dirs)",
+                 qPrintable(fileName));
+        delete newAppTranslator;
+        return false;
+    }
+
+    // Qt 自带控件的文本（标准对话框按钮等）由 qtbase 翻译提供；
+    // 并非每种语言都有，缺失时忽略即可。
+    QTranslator *newQtTranslator = new QTranslator;
+    if (!newQtTranslator->load(QStringLiteral("qtbase_") + normalized,
+            QLibraryInfo::location(QLibraryInfo::TranslationsPath))) {
+        delete newQtTranslator;
+        newQtTranslator = nullptr;
+    }
+
+    // 先卸载再销毁旧翻译器（QCoreApplication 不能持有已释放的对象）；
+    // removeTranslator 会向所有窗口投递 LanguageChange 事件。
+    if (appTranslator) {
+        QCoreApplication::removeTranslator(appTranslator);
+        delete appTranslator;
+    }
+    if (qtTranslator) {
+        QCoreApplication::removeTranslator(qtTranslator);
+        delete qtTranslator;
+    }
+
+    appTranslator = newAppTranslator;
+    qtTranslator = newQtTranslator;
+    languageCode = normalized;
+
+    // 后安装的翻译器优先查找，因此本程序翻译放在最后安装，
+    // 以便覆盖 Qt 自带翻译中的同名条目。
+    if (qtTranslator)
+        QCoreApplication::installTranslator(qtTranslator);
+    QCoreApplication::installTranslator(appTranslator);
+
+    return true;
+}
+
+// 建立“选项 -> 设置 -> 语言”子菜单：每种支持的语言一个可勾选项，
+// 勾选后立即切换界面语言并记入 QSettings，下次启动沿用。
+void NineChessWindow::createLanguageMenu()
+{
+    languageMenu = new QMenu(tr("语言"), this);
+
+    QActionGroup *languageGroup = new QActionGroup(this);
+    languageGroup->setExclusive(true);
+
+    for (int i = 0; i < kLanguageCount; ++i) {
+        const QString code = QString::fromLatin1(kLanguages[i].code);
+        // 菜单项始终用该语言自身的写法，避免"用当前语言翻译语言名"的歧义
+        QAction *action = languageMenu->addAction(languageNativeName(code));
+        action->setCheckable(true);
+        action->setChecked(code == languageCode);
+        action->setData(code);
+        languageGroup->addAction(action);
+        connect(action, &QAction::triggered, this, &NineChessWindow::actionLanguageChanged);
+    }
+
+    // 原“设置”是不可用的占位项，这里让它承载语言子菜单
+    ui.actionSetting_O->setMenu(languageMenu);
+    ui.actionSetting_O->setEnabled(true);
+}
+
+void NineChessWindow::actionLanguageChanged()
+{
+    QAction *action = qobject_cast<QAction *>(sender());
+    if (!action)
+        return;
+
+    const QString code = action->data().toString();
+    if (code == languageCode)
+        return;
+
+    if (!applyLanguage(code)) {
+        // 翻译文件缺失：恢复勾选到当前语言，不做任何切换
+        if (languageMenu) {
+            for (QAction *item : languageMenu->actions())
+                item->setChecked(item->data().toString() == languageCode);
+        }
+        return;
+    }
+
+    // applyLanguage 已投递 LanguageChange 事件，界面文本由 changeEvent 统一刷新
+    QSettings settings(QStringLiteral("NineChess"), QStringLiteral("NineChess"));
+    settings.setValue(QStringLiteral("ui/language"), code);
+}
+
+// 按当前语言刷新所有界面文本。.ui 中的静态文本由 ui.retranslateUi 处理，
+// 这里补充窗口标题、动态规则菜单和状态栏等运行期生成的文本。
+void NineChessWindow::retranslateUi()
+{
+    ui.retranslateUi(this);
+
+    setWindowTitle(tr("九连棋 v%1").arg(QString::fromLatin1(NINECHESS_VERSION_SHORT)));
+
+    if (game) {
+        // 规则菜单为动态创建，需按新语言重建名称与提示
+        const QMap<int, QStringList> actions = game->getActions();
+        for (QAction *ruleAction : ruleActionList) {
+            const auto it = actions.constFind(ruleAction->data().toInt());
+            if (it != actions.constEnd()) {
+                ruleAction->setText(it.value().at(0));
+                ruleAction->setToolTip(it.value().at(1));
+            }
+        }
+        // 限时限步标签与规则提示
+        ruleInfo();
+        // 状态栏提示由模型生成，按新语言重新取一次
+        game->refreshText();
+    }
+
+    if (languageMenu)
+        languageMenu->setTitle(tr("语言"));
 }
 
 void NineChessWindow::closeEvent(QCloseEvent *event)
@@ -148,6 +524,16 @@ void NineChessWindow::showEvent(QShowEvent *event)
             resizeDocks({ ui.dockWidget }, { width }, Qt::Horizontal);
         });
     }
+}
+
+void NineChessWindow::changeEvent(QEvent *event)
+{
+    // 装载/卸载 QTranslator 时 Qt 会向所有窗口投递 LanguageChange，
+    // 界面文本在这里统一重建（含 .ui 生成的 retranslateUi 与动态菜单项）
+    if (event->type() == QEvent::LanguageChange)
+        retranslateUi();
+
+    QMainWindow::changeEvent(event);
 }
 
 bool NineChessWindow::eventFilter(QObject *watched, QEvent *event)
@@ -301,24 +687,25 @@ void NineChessWindow::initialize()
 
 void NineChessWindow::ruleInfo()
 {
-    int s = game->getStepsLimit();
-    int t = game->getTimeLimit();
-    QString tl(" 不限时");
-    QString sl(" 不限步");
+    if (ruleNo < 0 || ruleNo >= NineChess::RULE_COUNT)
+        return;
+
+    const int s = game->getStepsLimit();
+    const int t = game->getTimeLimit();
+    QString tl = tr(" 不限时");
+    QString sl = tr(" 不限步");
     if (s > 0)
-        sl = " 限" + QString::number(s) + "步";
+        sl = tr(" 限%1步").arg(s);
     if (t > 0)
-        tl = " 限时" + QString::number(t) + "分";
+        tl = tr(" 限时%1分").arg(t);
 
     // 规则显示
     ui.labelRule->setText(tl + sl);
-    // 规则提示
-    ui.labelInfo->setToolTip(QString(NineChess::rules[ruleNo].name) + "\n" + 
-        NineChess::rules[ruleNo].description);
+    // 规则提示：规则名与说明是模型层的常量文本，统一使用 "NineChess" 上下文翻译
+    const QString ruleName = QCoreApplication::translate("NineChess", NineChess::rules[ruleNo].name);
+    const QString ruleDescription = QCoreApplication::translate("NineChess", NineChess::rules[ruleNo].description);
+    ui.labelInfo->setToolTip(ruleName + "\n" + ruleDescription);
     ui.labelRule->setToolTip(ui.labelInfo->toolTip());
-
-    //QString tip_Rule = QString("%1\n%2").arg(tr(NineChess::RULES[ruleNo].name))
-    //    .arg(tr(NineChess::RULES[ruleNo].description));
 }
 
 void NineChessWindow::on_actionLimited_T_triggered()
@@ -569,7 +956,7 @@ void NineChessWindow::on_actionSaveAs_A_triggered()
     if (initialPath.isEmpty())
         initialPath = QDir(lastManualDirectory()).filePath(tr("棋谱.txt"));
 
-    QString path = QFileDialog::getSaveFileName(this, tr("打开棋谱文件"), initialPath, "TXT(*.txt)");
+    QString path = QFileDialog::getSaveFileName(this, tr("保存棋谱文件"), initialPath, "TXT(*.txt)");
     if (path.isEmpty() == false)
     {
         saveLastManualDirectory(path);
@@ -818,7 +1205,7 @@ void NineChessWindow::on_actionAbout_A_triggered()
 
     dialog->setWindowFlags(Qt::Dialog | Qt::WindowCloseButtonHint);
     dialog->setObjectName(QStringLiteral("aboutDialog"));
-    dialog->setWindowTitle(tr("九连棋"));
+    dialog->setWindowTitle(tr("九连棋 v%1").arg(QString::fromLatin1(NINECHESS_VERSION_SHORT)));
     dialog->setModal(true);
     // 生成各个控件
     QVBoxLayout *vLayout = new QVBoxLayout(dialog);
@@ -826,6 +1213,7 @@ void NineChessWindow::on_actionAbout_A_triggered()
     QLabel *label_icon1 = new QLabel(dialog);
     QLabel *label_icon2 = new QLabel(dialog);
     QLabel *label_text = new QLabel(dialog);
+    QLabel* label_text1 = new QLabel(dialog);
     QLabel *label_text2 = new QLabel(dialog);
     // 设置各个控件数据
     label_icon1->setPixmap(QPixmap(QString::fromUtf8(":/image/resources/image/black_piece.png")));
@@ -837,16 +1225,24 @@ void NineChessWindow::on_actionAbout_A_triggered()
     label_icon1->setScaledContents(true);
     label_icon2->setScaledContents(true);
 
-    label_text->setText(tr("NineChess 九连棋"));
+    label_text->setText(tr("NineChess v%1").arg(QString::fromLatin1(NINECHESS_VERSION_SHORT)));
     label_text->setAlignment(Qt::AlignCenter);
-    label_text2->setText(tr("-- by liuweilhy@163.com"));
-    label_text2->setAlignment(Qt::AlignCenter);
+    // 地址与邮箱做成可点击链接：默认由系统浏览器/邮件客户端打开
+    label_text1->setTextFormat(Qt::RichText);
+    label_text1->setOpenExternalLinks(true);
+    label_text1->setText(QStringLiteral("<a href=\"https://www.cnblogs.com/liuweilhy\">https://www.cnblogs.com/liuweilhy</a>"));
+    label_text1->setAlignment(Qt::AlignRight);
+    label_text2->setTextFormat(Qt::RichText);
+    label_text2->setOpenExternalLinks(true);
+    label_text2->setText(QStringLiteral("<a href=\"mailto:liuweilhy@163.com\">-- by liuweilhy@163.com</a>"));
+    label_text2->setAlignment(Qt::AlignRight);
 
     // 布局
     vLayout->addLayout(hLayout);
     hLayout->addWidget(label_icon1);
     hLayout->addWidget(label_icon2);
     hLayout->addWidget(label_text);
+    vLayout->addWidget(label_text1);
     vLayout->addWidget(label_text2);
     // 运行对话框
     dialog->exec();

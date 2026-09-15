@@ -5,7 +5,7 @@ charset = utf-8
 end_of_line = crlf
 insert_final_newline = true
 
-[{*.pro,*.pri,*.vcxproj,*.vcxproj.filters,*.vcxproj.user,*.props,*.targets,*.sln,*.ui,*.qrc,*.rc,*.md,*.toml,*.ini}]
+[{*.pro,*.pri,*.vcxproj,*.vcxproj.filters,*.vcxproj.user,*.props,*.targets,*.sln,*.ui,*.qrc,*.rc,*.ts,*.md,*.toml,*.ini}]
 charset = utf-8
 end_of_line = crlf
 insert_final_newline = true

@@ -39,6 +39,20 @@
         <file>resources/icon/RightHS.png</file>
         <file>resources/icon/SaveHS.png</file>
     </qresource>
+    <qresource prefix="/i18n">
+        <!-- 用 alias 去掉源路径中的 translations/ 中间层，
+             使运行时资源路径与语言代码一一对应：:/i18n/ninechess_<code>.qm -->
+        <file alias="ninechess_zh_CN.qm">translations/ninechess_zh_CN.qm</file>
+        <file alias="ninechess_zh_TW.qm">translations/ninechess_zh_TW.qm</file>
+        <file alias="ninechess_en.qm">translations/ninechess_en.qm</file>
+        <file alias="ninechess_ja.qm">translations/ninechess_ja.qm</file>
+        <file alias="ninechess_ko.qm">translations/ninechess_ko.qm</file>
+        <file alias="ninechess_de.qm">translations/ninechess_de.qm</file>
+        <file alias="ninechess_fr.qm">translations/ninechess_fr.qm</file>
+        <file alias="ninechess_ru.qm">translations/ninechess_ru.qm</file>
+        <file alias="ninechess_es.qm">translations/ninechess_es.qm</file>
+        <file alias="ninechess_pt.qm">translations/ninechess_pt.qm</file>
+    </qresource>
     <qresource prefix="/sound">
         <file>resources/sound/choose.wav</file>
         <file>resources/sound/drog.wav</file>

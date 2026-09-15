@@ -20,6 +20,9 @@
 *.ui text eol=crlf
 *.qrc text eol=crlf
 *.rc text eol=crlf
+*.ts text eol=crlf
+# lrelease 生成的二进制翻译包，禁止任何换行/编码转换
+*.qm binary
 *.md text eol=crlf
 *.toml text eol=crlf
 *.ini text eol=crlf

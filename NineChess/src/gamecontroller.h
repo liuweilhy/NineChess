@@ -47,6 +47,10 @@ public:
     // 浏览历史局面：统一入口，交由控制器维护 currentRow
     bool browseTo(int row);
 
+    // 语言切换后重新生成状态栏文本：模型持有提示模板，读取时才翻译，
+    // 因此换语言后只需重新取一次即可得到新语言的状态栏提示。
+    void refreshText();
+
     void setAiDepthTime(int depth1, int time1, int depth2, int time2);
     void getAiDepthTime(int &depth1, int &time1, int &depth2, int &time2);
 

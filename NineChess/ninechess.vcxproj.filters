@@ -55,6 +55,11 @@
       <Extensions>*</Extensions>
       <ParseFiles>false</ParseFiles>
     </Filter>
+    <Filter Include="Translation Files">
+      <UniqueIdentifier>{2F0A6C51-1D2E-4B77-9C6A-53E0B5A7D8C4}</UniqueIdentifier>
+      <Extensions>ts;qm</Extensions>
+      <ParseFiles>false</ParseFiles>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\aithread.cpp">
@@ -126,6 +131,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ninechess_symmetry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninechess_version.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="src\ninechesswindow.h">
@@ -288,5 +296,67 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NineChess.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="translations\ninechess_zh_CN.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_zh_TW.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_en.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ja.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ko.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_de.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_fr.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ru.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_es.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_pt.ts">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_zh_CN.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_zh_TW.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_en.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ja.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ko.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_de.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_fr.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_ru.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_es.qm">
+      <Filter>Translation Files</Filter>
+    </None>
+    <None Include="translations\ninechess_pt.qm">
+      <Filter>Translation Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

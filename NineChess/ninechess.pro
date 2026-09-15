@@ -45,6 +45,7 @@ HEADERS  += \
     src/ninechess_ai_ab.h \
     src/ninechess_book.h \
     src/ninechess_symmetry.h \
+    src/ninechess_version.h \
     src/ninechesswindow.h \
     src/pieceitem.h \
     src/aithread.h
@@ -53,6 +54,21 @@ FORMS    += \
 
 RESOURCES += \
     ninechesswindow.qrc
+
+# 界面翻译：用 lupdate 生成/更新 .ts，用 lrelease 生成 .qm。
+# 生成的 .qm 已随 ninechesswindow.qrc 打包进可执行文件（前缀 /i18n），
+# 修改 .ts 后需重新执行 lrelease 才会生效。
+TRANSLATIONS += \
+    translations/ninechess_zh_CN.ts \
+    translations/ninechess_zh_TW.ts \
+    translations/ninechess_en.ts \
+    translations/ninechess_ja.ts \
+    translations/ninechess_ko.ts \
+    translations/ninechess_de.ts \
+    translations/ninechess_fr.ts \
+    translations/ninechess_ru.ts \
+    translations/ninechess_es.ts \
+    translations/ninechess_pt.ts
 
 DISTFILES += \
     NineChess.rc

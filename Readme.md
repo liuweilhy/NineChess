@@ -1,303 +1,305 @@
-# 九连棋 NineChess
+# NineChess
 
-`NineChess` 是一个以 Qt 编写的九子棋类游戏项目，当前仓库同时包含图形界面程序 `NineChess` 和命令行测试程序 `NineChessConsole`。
-现版本的核心代码已经整理为“纯棋局模型 + 控制层赛制管理 + 位棋盘 Alpha-Beta AI”的结构，更适合继续扩展规则、调试 AI 和做回归测试。
-AI 引擎已支持多线程搜索（Lazy SMP）、时间预算与中途打断、根节点随机选择、静默搜索，并附带一套按规则独立的统计式开局库；所有 AI 行为都可以在 `NineChessConsole` 中复现与验证。
+**English** | [简体中文](./Readme_cn.md)
 
-## 支持规则
+## Language
+The program supports Simplified Chinese, Traditional Chinese, English, Japanese, Korean, German, French, Russian, Spanish and Portuguese; it follows your system locale on first launch and can be switched at any time under "Options → Settings → Language".
 
-### 莫里斯九子棋
-![莫里斯九子棋](./screenshot/莫里斯九子棋.PNG "Optional title")
+- Translation sources: `NineChess/translations/ninechess_<code>.ts`, refreshed with `lupdate` and compiled with `lrelease` into `.qm`; the `.qm` files are packed into the executable under the `/i18n` prefix through `ninechesswindow.qrc`, so they ship inside `NineChess.exe` and need no extra files.
+- Qt's own widgets (standard dialog buttons and the like) are translated by `qtbase_<code>.qm` taken from the Qt installation or the release folder; when it is absent those controls stay in English while the program's own text is still translated.
+- The game model does not link Qt: rule names, rule descriptions and status-bar tips are handed to the UI through an injectable hook (`NineChess::setTextTranslator`, context `"NineChess"`), and tips are stored as templates plus `%1`..`%9` arguments, so switching language refreshes them immediately without replaying the game. `NineChessConsole` installs no hook and therefore keeps printing the original Chinese source text.
 
-Nine Men's Morris 是最经典的九子棋规则之一：
+## Project
+`NineChess` is a Nine Men's Morris family game written in Qt. This repository contains both the GUI application `NineChess` and the command-line test harness `NineChessConsole`.
+The core code is now organised as "pure game model + controller-level match management + bitboard Alpha-Beta AI", which makes it easier to extend rules, debug the AI and run regression tests.
+The AI engine supports multi-threaded search (Lazy SMP), time budgets with mid-search interruption, randomised root selection and quiet search, and ships with a per-rule statistical opening book. Every AI behaviour can be reproduced and verified from `NineChessConsole`.
 
-- 棋盘共有 24 个落点，双方各 9 枚棋子，轮流摆子。
-- 任意一方形成“三连”后，可以提掉对手一子。
-- 中局通常只能沿连线移动到相邻位置。
-- 当一方只剩 3 子时，可以“飞子”到任意空位。
-- 一方棋子少于 3 枚，或无法继续满足规则要求时判负。
+## Supported Rules
 
-### 成三棋
+### Nine Men's Morris
+![Nine Men's Morris](./screenshot/莫里斯九子棋.PNG "Optional title")
 
-- 与莫里斯九子棋接近，但剩 3 子时不能飞子。
-- 走棋阶段若被“闷”而无法行动，判负。
+Nine Men's Morris is one of the most classic variants of the game:
 
-### 打三棋（12连棋）
-![12子棋](./screenshot/12子棋.PNG "Optional title")
+- The board has 24 points; each side has 9 pieces, placed alternately at the start.
+- Forming a "three-in-a-row" lets you remove one of the opponent's pieces.
+- In the middle game pieces normally move only along a line to an adjacent point.
+- A side reduced to 3 pieces may "fly" a piece to any empty point.
+- A side loses when it has fewer than 3 pieces, or when it can no longer satisfy the rules.
 
-这套规则使用带斜线的棋盘，双方各有 12 枚棋子：
+### Cheng San Qi
 
-1. 摆棋阶段被提子的点位会暂时成为禁点，直到进入走棋阶段。
-2. 如果开局把棋盘摆满，按规则判先手负。
-3. 摆子完成后，由后摆棋的一方先走。
-4. 一步若同时形成多个“三连”，可以连续提子。
-5. 其余基础规则与成三棋相近。
+- Close to Nine Men's Morris, but a side with 3 pieces left may not fly.
+- In the moving stage, being blocked (unable to move) loses the game.
 
-### 九连棋
-![九连棋](./screenshot/九连棋.PNG "Optional title")
+### Da San Qi (12 pieces)
+![12 pieces](./screenshot/12子棋.PNG "Optional title")
 
-九连棋是本项目默认规则，特点是棋子带编号：
+This variant uses a board with diagonal lines; each side has 12 pieces:
 
-1. 基础流程与成三棋相近。
-2. 相同编号、相同位置形成的“三连”不能重复提子。
-3. 走棋阶段若一方被“闷”，则由对手继续走棋，而不是直接判负。
-4. 一步形成几个有效“三连”，就可以提几个子。
+1. A point where a piece was removed during placement stays forbidden until the moving stage.
+2. If the board is completely filled during placement, the first player loses.
+3. After placement, the player who placed second moves first.
+4. Several "three-in-a-rows" formed by one move allow several consecutive removals.
+5. The remaining basic rules are close to Cheng San Qi.
 
-## 当前项目状态
+### NineChess
+![NineChess](./screenshot/九连棋.PNG "Optional title")
 
-### 图形界面
+NineChess is the default rule set of this project; its distinguishing feature is that the pieces are numbered:
+
+1. The basic flow is close to Cheng San Qi.
+2. A "three-in-a-row" formed by the same numbers at the same positions cannot remove a piece again.
+3. If a side is blocked in the moving stage, the opponent simply continues instead of winning immediately.
+4. As many valid "three-in-a-rows" as one move creates, that many pieces may be removed.
+
+## Current Status
+
+### GUI
 ![GUI](./screenshot/GUI.PNG "Optional title")
 
-当前仓库里的 GUI 工程已经恢复到可编译状态，并保留了原有的桌面界面风格。项目中正在持续整理旧代码与新结构之间的边界，当前比较重要的约定如下：
+The GUI project in this repository is back to a compilable state and keeps the original desktop look. The boundary between legacy code and the new structure is still being tidied up; the conventions that matter most today are:
 
-- `NineChess` 只负责纯棋规、局面状态、命令解析、局面变换与哈希。
-- 限时、限步、超时判负、AI 超时强制出招等赛制逻辑由 `GameController` 负责。
-- 外部裁定统一走 `adjudicateWin()` / `adjudicateDraw()`；`giveup()` 只表示认输。
-- 命令行与文本棋谱约定使用 `(c,p)`、`(c1,p1)->(c2,p2)`、`-(c,p)`、`-0`、`-1`、`==`。
+- `NineChess` owns pure rules, position state, command parsing, position transforms and hashing only.
+- `GameController` owns match logic such as time limits, step limits, timeout adjudication and forcing an AI move on timeout.
+- External adjudication always goes through `adjudicateWin()` / `adjudicateDraw()`; `giveup()` means resignation only.
+- Commands and text game records use `(c,p)`, `(c1,p1)->(c2,p2)`, `-(c,p)`, `-0`, `-1` and `==`.
 
-### 棋谱文件格式
+### Game Record Format
 
-棋谱是纯命令流文本（UTF-8 无 BOM）：首行为对局配置命令 `r<规则号>s<限步数>t<限时分钟>`（如 `r2s100t10`，各段可省略、顺序不限，`0` 表示不限制），之后每行一条走子命令：
+A game record is a plain command stream (UTF-8 without BOM). The first line is the game-setup command `r<rule>s<steps>t<minutes>` (for example `r2s100t10`; segments are optional and may appear in any order, and `0` means unlimited), followed by one move command per line:
 
 ```text
 r2s100t10
 (1,0)
 (0,0)
 ...
--1        ← 仅当超时判负时补写（后手负；先手负为 -0）
+-1        ← appended only on a timeout loss (second player loses; -0 if the first player loses)
 ```
 
-- 打开棋谱时按配置命令切换规则并恢复限时限步；配置命令由控制层与控制台识别，模型层不感知。
-- 平局（判和、限步判和）与认输本来就以 `==`、`-0`、`-1` 命令记录在棋谱中，回放自然还原；超时判负没有命令记录，保存时补写负方的 `-0`/`-1`。
-- 更早版本没有配置行的棋谱（纯走子命令）保持兼容，按当前规则回放。
-- 配置命令的语法解析见 `parseSetupCommand()`（`ninechess.h`），控制层与控制台共用。
+- Opening a game record switches the rule and restores the step/time limits according to the setup command; the setup command is recognised by the controller and the console, while the model itself is unaware of it.
+- Draws (adjudicated or by step limit) and resignations are already stored as `==`, `-0` and `-1` commands, so replay restores them naturally; a timeout loss has no command record, so the loser's `-0`/`-1` is appended on save.
+- Older records without a setup line (pure move commands) stay compatible and are replayed under the current rule.
+- The setup command is parsed by `parseSetupCommand()` (`ninechess.h`), shared by the controller and the console.
 
-### 已实现的主要功能
+### Main Features
 
-1. 支持 4 套内置规则：成三棋、打三棋、九连棋、莫里斯九子棋。
-2. 图形化棋盘、棋子动画、音效与状态栏提示。
-3. 棋谱文本显示、命令回放与历史浏览；棋谱为纯命令流，首行配置命令记录规则与限时限步，打开时自动恢复，超时判负等外部裁定终局补写结果命令。
-4. 局面镜像、翻转、离散角度旋转，以及黑白交换等变换能力。
-5. 人机对战，以及双 AI 自对弈的基础能力。
-6. 独立的命令行测试程序，便于调试规则、命令和局面文本输出。
-7. 位棋盘 Alpha-Beta 搜索引擎：迭代加深、分片置换表（16 字节槽位 × 1M 条）、TT 走法/杀手/历史排序、静默搜索、Aspiration 窗口、重复局面惩罚（含根局面与真实对局历史）、点位结构价值评估、PVS 零宽试探、强制提子延伸、LMR 迟到走法减搜。
-8. Lazy SMP 多线程搜索（默认线程数按 CPU 核数自动推导），支持时间预算与中途打断；动态深度（中局根局面追加 2 层）。
-9. 根节点随机选择（精确打分 + 分差阈值 + 加权随机，种子可复现）。
-10. 基于自对弈统计的开局库：按规则独立、16 对称规范化压缩、多轮训练累积评分。
-11. 限步赛制急迫分：控制层传入剩余步数提示（模型层不感知），子力领先方随步数耗尽被推动转化优势，缓解磨平局。
+1. Four built-in rule sets: Cheng San Qi, Da San Qi, NineChess and Nine Men's Morris.
+2. Graphical board, piece animation, sound effects and status-bar hints.
+3. Game record display, command replay and history browsing; records are plain command streams whose first line stores the rule and the limits and are restored automatically on open, with externally adjudicated endings (such as a timeout loss) appended as result commands.
+4. Position mirroring, flipping, discrete-angle rotation and colour swapping.
+5. Human-versus-AI play and the basics of AI-versus-AI self-play.
+6. A separate command-line test program for debugging rules, commands and position text output.
+7. Bitboard Alpha-Beta search engine: iterative deepening, bucketed transposition table (16-byte slots × 1M entries), TT move/killer/history ordering, quiet search, aspiration windows, repetition penalties (including the root position and the real game history), point-structure evaluation, PVS zero-width probes, forced-capture extension and LMR late-move reductions.
+8. Lazy SMP multi-threaded search (the thread count is derived from the CPU core count by default) with time budgets and mid-search interruption; dynamic depth (2 extra plies for middle-game root positions).
+9. Randomised root selection (exact scores + score-gap threshold + weighted randomness, reproducible with a seed).
+10. Statistical opening book trained by self-play: independent per rule, compressed with the 16 symmetries, with scores accumulated over multiple training rounds.
+11. Step-limit urgency score: the controller passes the remaining-step hint (the model is unaware of it), which pushes the materially leading side to convert its advantage as the steps run out and eases drawish endings.
 
-## AI 说明
+## AI Notes
 
-当前 `NineChess_AI_AB` 已经按照位棋盘结构重写。引擎的**完整算法逻辑、全部参数手册**
-（分类/类型/默认值/取值范围/作用域/固化常量）、**哨兵语义警示与 A/B 实验方法学**见
-[AI_ALPHABETA.md](./AI_ALPHABETA.md)；代码库总览（模型/状态机/规则/测试体系等总则）见
-[AI_SUMMARY.md](./AI_SUMMARY.md)。要点速览：
+`NineChess_AI_AB` has been rewritten around a bitboard representation. The engine's **complete algorithm logic and full parameter manual** (classification / type / default / range / scope / hardcoded constants) as well as the **sentinel-semantics warnings and A/B methodology** are in [AI_ALPHABETA.md](./AI_ALPHABETA.md); the repository-wide overview (model / state machine / rules / test system) is in [AI_SUMMARY.md](./AI_SUMMARY.md). Highlights:
 
-- Alpha-Beta 剪枝 + 迭代加深 + 静默搜索；PVS 零宽试探、Aspiration 窗口、强制提子延伸、
-  LMR 迟到走法减搜、重复局面惩罚（含根局面与真实对局历史）、TT 走法/杀手/历史排序。
-- 置换表为**每个 AI 实例私有**（先手/后手各持一张、互不共享，A/B 两臂与自对弈双方
-  不再经置换表互通知识；2026-09 起由"按规则全局共享"改为实例持有）、256 分片锁
-  （同实例内多线程互不阻塞）、定长桶数组 1M 条
-  （16 字节槽位、32 字节对齐缓存行）；对称规范化默认"仅开局节点 canonical"（16 视角取最小键）；
-  编号规则 hard 哈希增量维护，`selfcheck` 命令逐节点校验。
-- Lazy SMP 多线程（默认线程数按 CPU 核数自动推导），支持时间预算与中途打断；
-  动态深度（中局根局面追加 2 层）。
-- GUI 默认 AI 配置：思考深度 10、每步限时 5 秒（界面可调深度 1~20、限时 1~60 秒）。
-- 评估：按规则独立的 `EvalWeights` 权重表，另有点位结构价值、胜利临近压力分、限步急迫分等
-  可覆盖项；`tune` 命令按规则坐标下降自动调参（终局验证防过拟合，打印可回贴权重行）。
-- 根节点随机选择（精确打分 + 分差阈值 + 加权随机，种子可复现，默认仅开局前 10 步随机、
-  gap 16）与统计式开局库（按规则独立、16 对称规范化压缩）；开局库与残局库均未完全实现，
-  当前算法强度已足够、暂时不启用（见 [AI_SUMMARY.md](./AI_SUMMARY.md) §15）。
+- Alpha-Beta pruning + iterative deepening + quiet search, with PVS zero-width probes, aspiration windows, forced-capture extension, LMR late-move reductions, repetition penalties (including the root position and the real game history) and TT move/killer/history ordering.
+- The transposition table is **private to each AI instance** (one table each for the first and second player, never shared, so the two A/B arms and the two self-play sides no longer exchange knowledge through the TT; changed in 2026-09 from "globally shared per rule" to instance-owned), with 256 shard locks (multi-threading inside one instance does not block itself) and a fixed-length bucket array of 1M entries (16-byte slots, 32-byte aligned cache lines); symmetric canonicalisation by default applies to "canonical at opening nodes only" (smallest key over the 16 views); the hard hash for numbered rules is maintained incrementally and verified node by node by the `selfcheck` command.
+- Lazy SMP multi-threading (the thread count is derived from the CPU core count by default) with time budgets and mid-search interruption; dynamic depth (2 extra plies for middle-game root positions).
+- Default GUI AI configuration: search depth 10, 5 seconds per move (the UI allows depth 1~20 and 1~60 seconds).
+- Evaluation: per-rule `EvalWeights` tables plus overridable terms such as point-structure value, near-win pressure and step-limit urgency; the `tune` command performs per-rule coordinate-descent tuning (with endgame validation against overfitting and a printable weight line).
+- Randomised root selection (exact scores + score-gap threshold + weighted randomness, reproducible with a seed, by default only for the first 10 moves with gap 16) and a statistical opening book (independent per rule, compressed with the 16 symmetries); neither the opening book nor an endgame book is fully implemented, and both stay disabled for now because the current strength is sufficient (see [AI_SUMMARY.md](./AI_SUMMARY.md) §15).
 
-### 实测结论（Release x64）
+### Measured Results (Release x64)
 
-> **Debug 与 Release 的差异**：本节及 benchmark 的全部引擎数据均为 Release x64（`/O2`）构建实测。
-> **Debug 构建未开编译优化，引擎 NPS 显著偏低（通常只有 Release 的几分之一），因此
-> Debug 版 GUI 中 AI 的实际搜索速度会明显低于 benchmark 的结果**——这是编译优化的差异，
-> 不是算法差异；评估 AI 强度或对比实验请使用 Release 构建。
+> **Debug versus Release**: every engine figure in this section and in the benchmark comes from Release x64 (`/O2`) builds.
+> **Debug builds have no compiler optimisation and a much lower NPS (usually a fraction of Release), so the AI in a Debug GUI searches noticeably slower than the benchmark numbers suggest** — this is a difference in compiler optimisation, not in algorithms; use Release builds when evaluating AI strength or running comparisons.
 
-- 哈希模式：开局空盘深度 7，canonical 35,356 节点 / 24ms vs 普通哈希 150,854 节点 / 55ms；真实中局深度 6，全对称模式 NPS 约 0.49M vs 普通 1.30M（每节点开销约 4 倍，节点数相同）。
-- 多线程（16 逻辑核）：快照/哈希优化后单线程空盘深度 10 约 1.7M NPS；14 线程约 7.8M NPS（约 12 倍）；8 秒预算完成深度 11。
-- 快照/哈希优化：编号规则（九连棋）空盘深度 10 由 5.5 秒降至 3.1 秒（PVS 后 2.2 秒），普通规则由 1.05 秒降至 0.74 秒；节点数/最佳走法/估值与优化前完全一致。
-- 动态深度：中局固定深度 10 → 实际深度 12，35ms → 195ms，等效强度显著提升。
-- 开局库（规则 2，500 局训练）：空盘条目 530 样本，首着 `(2,0)` 胜率 81%；深度差 5v7 对抗 60 局，执先方用书后胜率 13 → 18（书内走法 180 次零拒绝）。
-- 观察：当前评估下先手优势明显（深度 5~8 自对弈后手几乎不赢），多数对局以步数上限平局收场，引擎偏保守、残局转化偏慢——评估"进取性"调参是后续重点；`vs` 已支持奇偶局交替执先与单侧参数（`wp`/`sp`/`ft`/`ms`/`tp`/`sr`）用于该方向的 A/B。
-- 胜利临近压力分（`wp`）的实证边界：自对弈 60 局 8:2 压制关闭方（证明自洽）；但对外 80 局/臂 wp=150 vs wp=0 仅差 3 胜，小于同配置重跑噪声 ±5 胜（2026-09 重测，详见 `benchmark/results/evalab_*/CORRECTION.md`）——对外强度效应未证实，评估项 A/B 须先建立噪声基线再下结论。
+- Hash modes: empty opening at depth 7, canonical 35,356 nodes / 24 ms versus 150,854 nodes / 55 ms with plain hashing; a real middle-game position at depth 6 runs at about 0.49M NPS in fully symmetric mode versus 1.30M NPS plain (about 4× the per-node cost with identical node counts).
+- Multi-threading (16 logical cores): about 1.7M NPS single-threaded on an empty board at depth 10 after the snapshot/hash optimisations; about 7.8M NPS with 14 threads (roughly 12×); an 8-second budget completes depth 11.
+- Snapshot/hash optimisations: for the numbered rule (NineChess) the empty board at depth 10 drops from 5.5 s to 3.1 s (2.2 s after PVS), and for ordinary rules from 1.05 s to 0.74 s; node counts, best moves and scores are identical to before the optimisation.
+- Dynamic depth: a fixed depth of 10 in the middle game becomes an actual depth of 12, 35 ms → 195 ms, a significant rise in effective strength.
+- Opening book (rule 2, trained on 500 games): the empty-board entry has 530 samples and the first move `(2,0)` wins 81%; in a depth-difference 5v7 match over 60 games the first player's win rate rose from 13 to 18 when using the book (180 book moves with zero rejections).
+- Observation: under the current evaluation the first-player advantage is obvious (in depth 5~8 self-play the second player almost never wins), most games end in a draw at the step limit, and the engine is conservative with slow endgame conversion — tuning "aggressiveness" in the evaluation is the next focus; `vs` already supports alternating the first move between odd/even games and one-sided parameters (`wp`/`sp`/`ft`/`ms`/`tp`/`sr`) for that A/B work.
+- Empirical limits of the near-win pressure term (`wp`): 60 self-play games gave 8:2 against the side with it disabled (proving self-consistency), but 80 games per arm against the outside with wp=150 versus wp=0 differ by only 3 wins, below the ±5-win re-run noise of the same configuration (re-measured 2026-09, see `benchmark/results/evalab_*/CORRECTION.md`) — the external strength effect is unproven, and A/B of evaluation terms must establish a noise baseline before drawing conclusions.
 
-## 工程结构
+## Project Layout
 
-项目目前大致遵循 MVC 思路：
+The project roughly follows MVC:
 
 ### Model
 
 - `NineChess/src/ninechess_common.h`
-  核心公共常量、`Rule`、`ChessData`、位棋盘状态定义。
+  Core shared constants plus the `Rule`, `ChessData` and bitboard state definitions.
 - `NineChess/src/ninechess.h/.cpp`
-  纯棋局模型，负责规则、局面、命令、变换、哈希和胜负判定。
+  The pure game model, owning rules, positions, commands, transforms, hashing and win/loss decisions.
 - `NineChess/src/ninechess_ai_ab.h/.cpp`
-  Alpha-Beta AI。
+  The Alpha-Beta AI.
 - `NineChess/src/ninechess_symmetry.h/.cpp`
-  16 个等价视角的对称变换共享工具（AI 置换表与开局库共用）。
+  Shared symmetry utilities for the 16 equivalent views (used by both the AI transposition table and the opening book).
 - `NineChess/src/ninechess_book.h/.cpp`
-  统计式开局库（按规则独立、对称压缩、自对弈评分）。
+  The statistical opening book (independent per rule, symmetrically compressed, scored by self-play).
 
 ### View
 
 - `NineChess/src/ninechesswindow.*`
-  主窗口。
+  The main window.
 - `NineChess/src/gamescene.*`
-  棋局场景。
+  The game scene.
 - `NineChess/src/gameview.*`
-  棋局视图。
+  The game view.
 - `NineChess/src/boarditem.*`
-  棋盘图元。
+  The board graphics item.
 - `NineChess/src/pieceitem.*`
-  棋子图元。
+  The piece graphics item.
 
 ### Controller
 
 - `NineChess/src/gamecontroller.*`
-  管理对局流程、限时限步、界面同步和 AI 调度。
+  Manages the game flow, time/step limits, UI synchronisation and AI dispatching.
 - `NineChess/src/aithread.*`
-  AI 线程包装。
+  The AI thread wrapper.
 
 ### Console Test
 
 - `NineChessConsole/ninechessconsole.cpp`
-  直接复用核心模型，适合做规则验证、命令行走子和回归测试。
+  Reuses the core model directly; good for rule verification, command-line moves and regression testing.
 
-## 构建说明
+### Resources, Version And Localisation
+
+- `NineChess/src/ninechess_version.h`
+  The single source of the version number: change its four numbers and the executable version resource, the window title and the About dialog all follow.
+- `NineChess/translations/ninechess_*.ts` / `*.qm`
+  UI translation sources and their compiled catalogues, packed into the executable under `/i18n` (see "Language" above).
+
+### AI Benchmark Tools
+
+- `benchmark/benchmark*.cpp` + `benchmark/build_*.bat`
+  Same-process match drivers for the 2018, 2026-05 and current engines, plus a self-play driver, used for AI strength comparison; see [benchmark/README.md](./benchmark/README.md) and the reports under `benchmark/results/`.
+- `benchmark/may_engine/`, `benchmark/old_engine/`
+  Frozen copies of the earlier engines, referenced only as match opponents.
+
+## Build Notes
 
 ### Windows / Visual Studio
 
-- 解决方案文件：`ninechess.sln`
-- GUI 工程：`NineChess`
-- 控制台工程：`NineChessConsole`
-- 当前 GUI 工程配置已验证可在 `Qt 5.15.2 (msvc2019_64) + MSVC v143`（VS2022 工具集，2026-09-14 起，此前 v142）环境下编译。
+- Solution file: `ninechess.sln`
+- GUI project: `NineChess`
+- Console project: `NineChessConsole`
+- The current GUI project configuration is verified to build with `Qt 5.15.2 (msvc2019_64) + MSVC v143` (VS2022 toolset, since 2026-09-14; previously v142).
 
 ### qmake
 
-- GUI 工程同时保留 `NineChess/ninechess.pro`。
-- 对 MSVC 已显式追加 `/utf-8`，避免无 BOM 的 UTF-8 源码被误判为本地代码页。
+- The GUI project also keeps `NineChess/ninechess.pro`.
+- `/utf-8` is added explicitly for MSVC so that UTF-8 sources without BOM are not misread as the local code page.
 
-## 编码与文本格式
+## Encoding And Text Format
 
-当前仓库已经统一以下约定：
+The repository has settled on the following conventions:
 
-- 源码、Markdown 和工程文本文件使用 `UTF-8 without BOM`。
-- Windows 下统一使用 `CRLF` 换行。
-- `.editorconfig`、`.gitattributes`、`AGENTS.md` 一起约束编码与换行。
-- GUI、Console、核心源码都应与 `/utf-8` 编译选项保持一致。
+- Source, Markdown and project text files use `UTF-8 without BOM`.
+- `CRLF` line endings are used on Windows.
+- `.editorconfig`, `.gitattributes` and `AGENTS.md` together enforce encoding and line endings.
+- GUI, console and core sources must all stay compatible with the `/utf-8` compiler option.
 
-## 命令行调试
+## Command-Line Debugging
 
-`NineChessConsole` 适合快速验证规则、命令和 AI 行为，核心约定如下：
+`NineChessConsole` is the quick way to verify rules, commands and AI behaviour; the core conventions are:
 
-- 坐标全部使用 0-based。
-- `rule N` 切换规则，`N` 范围为 `0..3`。
-- `history` 查看命令历史，`undo` 回退一步，`new` 重新开局。
-- 启动时可直接指定规则编号，例如：
+- All coordinates are 0-based.
+- `rule N` switches the rule, with `N` in the range `0..3`.
+- `history` shows the command history, `undo` steps back one move and `new` starts a new game.
+- The rule number can be given directly at startup, for example:
 
 ```text
 NineChessConsole.exe 2
 NineChessConsole.exe --rule 2
 ```
 
-AI 调试命令（参数缺省用默认值，`help` 有完整说明）：
+AI debugging commands (omitted arguments fall back to their defaults; `help` documents them fully):
 
 - `search [d] [t] [h] [r] [g] [th] [s] [pv] [a] [rep] [q] [dd] [pvs] [ext] [lmr]`
-  单局面搜索，打印最佳走法、估值、深度、耗时、节点、NPS、TT 统计与根走法分数。
+  Single-position search, printing the best move, score, depth, elapsed time, nodes, NPS, TT statistics and root move scores.
 - `match [n] [d] [h] [r] [th] [s] [mp] [dd]`
-  同配置自对弈 n 局，报告胜负 / 步数 / 节点 / NPS；`mp` 限步自动传入评估急迫项。
+  Self-play of n games with identical settings, reporting wins / moves / nodes / NPS; `mp` passes the step limit into the evaluation urgency term automatically.
 - `vs [n] [d1] [h1] [pv1] [d2] [h2] [pv2] [s] [a] [rep] [wp] [sp] [ft] [th] [ext] [lmr] [ms] [tp] [sr]`
-  不同配置引擎对抗（深度差、哈希模式、点位价值等），用于强度 A/B；奇偶局交替执先，
-  `wp`/`sp`/`ft`/`ext`/`lmr`/`ms`/`tp`/`sr` 只作用于引擎 2（`ext`/`lmr`/`ms`/`tp` 取 -1 = 沿用默认值）。
-- `booktrain [n] [d] [s]` 自对弈训练开局库；`bookstat` 查看条目与胜率；
-  `bookon` / `bookoff` 启停开局库（`match` / `vs` 生效）；`booksave` / `bookload` 存取。
-- `selfcheck [n] [d]` 4 规则随机自对弈并逐节点校验增量哈希（引擎改动后的健康检查）。
-- `tune [n] [d] [s] [r]` 按当前规则自动调参（坐标下降 + 终局验证，打印可回贴的权重行）。
+  Matches between differently configured engines (depth difference, hash mode, point value and so on) for strength A/B; the first move alternates between odd and even games, and `wp`/`sp`/`ft`/`ext`/`lmr`/`ms`/`tp`/`sr` apply to engine 2 only (`ext`/`lmr`/`ms`/`tp` take -1 to keep the default).
+- `booktrain [n] [d] [s]` trains the opening book by self-play; `bookstat` shows entries and win rates; `bookon` / `bookoff` enable or disable the book (effective for `match` / `vs`); `booksave` / `bookload` store and load it.
+- `selfcheck [n] [d]` runs random self-play over the 4 rules and verifies the incremental hash node by node (a health check after engine changes).
+- `tune [n] [d] [s] [r]` tunes parameters automatically for the current rule (coordinate descent + endgame validation, printing a weight line you can paste back).
 
-参数速记：`h` 哈希模式（0 普通 / 1 仅开局规范化 / 2 全部规范化）、`r` 根节点随机、
-`g` 随机分差、`th` 线程数（0 = 按 CPU 核数自动）、`s` 种子、`pv` 点位价值权重、
-`a` Aspiration 窗口、`rep` 重复惩罚、`q` 静默搜索、`dd` 动态深度、`pvs` PVS 试探、
-`ext` 强制提子延伸（默认开）、`lmr` LMR 减搜（默认开）、`ms` 封闭三连保护、
-`tp` 连续阶段插值（默认关）、`sr` 剩余步数提示。
+Parameter shorthand: `h` hash mode (0 plain / 1 canonical at opening nodes only / 2 canonical everywhere), `r` randomised root, `g` random score gap, `th` thread count (0 = derive from the CPU core count), `s` seed, `pv` point value weight, `a` aspiration window, `rep` repetition penalty, `q` quiet search, `dd` dynamic depth, `pvs` PVS probes, `ext` forced-capture extension (on by default), `lmr` LMR reductions (on by default), `ms` closed-mill protection, `tp` phase interpolation (off by default), `sr` remaining-step hint.
 
-各参数的完整语义、命令默认值与引擎默认值的差异、关闭/哨兵规则
-（`wp`/`pv` 无 -1 哨兵，`sp`/`ft`/`ms` 等 <0 = 沿用默认）见
-[AI_ALPHABETA.md](./AI_ALPHABETA.md) §3/§4。
+The full semantics of every parameter, the differences between command defaults and engine defaults, and the disable/sentinel rules (`wp`/`pv` have no -1 sentinel, while `sp`/`ft`/`ms` and others treat <0 as "keep the default") are in [AI_ALPHABETA.md](./AI_ALPHABETA.md) §3/§4.
 
-## 测试与回归
+## Tests And Regression
 
-仓库现在同时提供两层自动化测试：
+The repository provides two layers of automated tests:
 
 - `tests/RuleHarness.vcxproj` + `tests/rule_harness.cpp`
-  直接复用 `NineChess` 内核做规则级白盒测试，适合验证合法性判断、提子逻辑、堵死判负、三连历史、飞子规则等核心行为。
+  Reuses the `NineChess` core for rule-level white-box tests, covering legality checks, capture logic, blocked-loss, three-in-a-row history and the flying rule.
 - `tests/Run-ConsoleBlackBoxTests.ps1`
-  通过回放命令行输入、检查 `NineChessConsole` 输出做黑盒测试，适合验证 `rules` / `rule` / `history` / `undo` / `-0` / `==` / 启动参数等整机链路。
+  A black-box test that replays command-line input and checks `NineChessConsole` output, covering the whole chain of `rules` / `rule` / `history` / `undo` / `-0` / `==` and startup arguments.
 
-当前已经提供的测试入口如下：
+The test entry points available today are:
 
 - `tests/Test-Rule0-ChengSanQi.ps1`
-  单独测试规则 0（成三棋）。
+  Tests rule 0 (Cheng San Qi) on its own.
 - `tests/Test-Rule1-DaSanQi.ps1`
-  单独测试规则 1（打三棋 / 12 连棋）。
+  Tests rule 1 (Da San Qi / 12-piece) on its own.
 - `tests/Test-Rule2-JiuLianQi.ps1`
-  单独测试规则 2（九连棋）。
+  Tests rule 2 (NineChess) on its own.
 - `tests/Test-Rule3-Morris.ps1`
-  单独测试规则 3（莫里斯九子棋）。
+  Tests rule 3 (Nine Men's Morris) on its own.
 - `tests/Run-All-RuleTests.ps1`
-  顺序运行 4 个规则白盒测试，并输出汇总结果。
+  Runs the 4 rule white-box tests in sequence and prints a summary.
 - `tests/Run-ConsoleBlackBoxTests.ps1`
-  运行命令行黑盒回放测试，并输出汇总结果。
+  Runs the console black-box replay tests and prints a summary.
 - `tests/Run-All-RegressionTests.ps1`
-  一次性运行“规则白盒 + Console 黑盒”两层回归，是当前最推荐的总入口。
+  Runs both layers (rule white-box + console black-box) in one go; this is the recommended main entry point.
 - `tests/Run-MatchBattery.ps1`
-  长时间实战对局验证：批量运行多组 vs 对抗（开局库开关、深度差、点位价值等配置），输出对比表；`-Games N` 控制每组局数。
+  Long-running match verification: batch-runs several `vs` configurations (book on/off, depth difference, point value and so on) and prints a comparison table; `-Games N` controls the number of games per group.
 
-在 Windows PowerShell 中，可以直接这样执行总回归：
+In Windows PowerShell the full regression can be run directly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\tests\Run-All-RegressionTests.ps1"
 ```
 
-如果只想跑规则测试，可以执行：
+To run only the rule tests:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\tests\Run-All-RuleTests.ps1"
 ```
 
-如果只想跑命令行黑盒测试，可以执行：
+To run only the console black-box tests:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\tests\Run-ConsoleBlackBoxTests.ps1"
 ```
 
-这套测试当前重点覆盖：
+These tests currently focus on:
 
-- 4 套规则下的开局、中局、提子与胜负判断；
-- 非法招法不会污染局面与命令历史；
-- 打三棋禁点复用、双三连多提子；
-- 九连棋编号三连历史、被闷后的续走规则；
-- 莫里斯九子棋三子飞行规则；
-- `NineChessConsole` 的规则切换、历史、撤销、认输、判和与启动参数；
-- AI 对局验证：`Run-MatchBattery.ps1` 批量 vs 对抗（书开关 / 深度差 / 评估配置），`match` / `vs` 自对弈与配置对比。
+- Opening, middle game, captures and win/loss decisions under all 4 rule sets;
+- Illegal moves never pollute the position or the command history;
+- Da San Qi forbidden-point reuse and multiple removals from double three-in-a-rows;
+- NineChess numbered three-in-a-row history and the continue-after-blocked rule;
+- The 3-piece flying rule in Nine Men's Morris;
+- `NineChessConsole` rule switching, history, undo, resignation, draw adjudication and startup arguments;
+- AI match verification: batch `vs` matches via `Run-MatchBattery.ps1` (book on/off, depth difference, evaluation configuration), plus `match` / `vs` self-play and configuration comparison.
 
-## 历史、许可与作者
+## History, Licence And Author
 
-- 更新历史见 [History.txt](./History.txt)
-- 许可说明见 [Licence.txt](./Licence.txt)
-- 原始项目作者：`liuweilhy`
-- 联系方式：`liuweilhy@163.com`
+- Update history: [History.txt](./History.txt)
+- Licence: [Licence.txt](./Licence.txt)
+- Original author: `liuweilhy`
+- Contact: `liuweilhy@163.com`
 
-项目最早的核心模型代码可追溯到 2013 年，Qt 图形界面版本在后续几年内逐步成形；当前仓库则在保留原始项目方向的基础上，继续整理规则层、控制层与 AI 的结构。
+The earliest core model code dates back to 2013 and the Qt GUI took shape over the following years; this repository keeps the original direction while continuing to tidy up the rule layer, the controller layer and the AI.
 
-## 项目地址与下载
+## Links And Downloads
 
-- 源码（Gitee）：[https://gitee.com/liuweilhy/NineChess](https://gitee.com/liuweilhy/NineChess)
-- 发布页（Gitee）：[https://gitee.com/liuweilhy/NineChess/releases](https://gitee.com/liuweilhy/NineChess/releases)
-- CSDN 资源页：[https://download.csdn.net/download/liuweilhy/10871298](https://download.csdn.net/download/liuweilhy/10871298)
-- 百度网盘：[https://pan.baidu.com/s/1NZnmAUozbPt9K04fTouxMA](https://pan.baidu.com/s/1NZnmAUozbPt9K04fTouxMA)
+- Source (Gitee): [https://gitee.com/liuweilhy/NineChess](https://gitee.com/liuweilhy/NineChess)
+- Releases (Gitee): [https://gitee.com/liuweilhy/NineChess/releases](https://gitee.com/liuweilhy/NineChess/releases)
+- CSDN resource page: [https://download.csdn.net/download/liuweilhy/10871298](https://download.csdn.net/download/liuweilhy/10871298)
+- Baidu Netdisk: [https://pan.baidu.com/s/1NZnmAUozbPt9K04fTouxMA](https://pan.baidu.com/s/1NZnmAUozbPt9K04fTouxMA)
 
-## 捐助作者
+## Donate
 ![GUI](./screenshot/donate.png "donate")

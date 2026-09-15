@@ -291,13 +291,24 @@ const QMap<int, QStringList> GameController::getActions()
     QMap<int, QStringList> actions;
     for (int i = 0; i < NineChess::RULE_COUNT; i++)
     {
-        // QMap的key存放int索引值，value存放规则名称和规则提示
+        // QMap的key存放int索引值，value存放规则名称和规则提示。
+        // 规则名/说明是模型层常量，统一用 "NineChess" 上下文翻译，
+        // 与主窗口 ruleInfo()、模型层状态栏提示保持同一套翻译条目。
         QStringList strlist;
-        strlist.append(tr(NineChess::rules[i].name));
-        strlist.append(tr(NineChess::rules[i].description));
+        strlist.append(QCoreApplication::translate("NineChess", NineChess::rules[i].name));
+        strlist.append(QCoreApplication::translate("NineChess", NineChess::rules[i].description));
         actions.insert(i, strlist);
     }
     return actions;
+}
+
+void GameController::refreshText()
+{
+    message = QString::fromStdString(chess.getTip());
+    emit statusBarChanged(message);
+    // 语言切换时 ui.retranslateUi() 会把玩家标签复位成 .ui 里的"玩家1/玩家2"，
+    // 这里重新发出子力计数，把它恢复成运行期的" x => y"显示
+    emitPieceCountsChanged();
 }
 
 int64_t GameController::currentTimeMS()

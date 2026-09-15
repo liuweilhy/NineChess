@@ -1,24 +1,48 @@
-# 九连棋 NineChess 许可说明
+# 九连棋 NineChess 许可说明 Licence
 
 本仓库的源代码与项目文本遵循 LGPL v3 协议，除文件头或第三方资源另有声明外，包括：
+The source code and project text in this repository are licensed under LGPL v3, unless a file header or a third-party resource states otherwise. This covers:
+
 1. NineChess 图形界面程序源码；
+   the source code of the NineChess GUI application;
 2. NineChessConsole 命令行测试程序源码；
+   the source code of the NineChessConsole command-line test program;
 3. tests 目录下的规则测试、命令行黑盒测试源码与脚本；
-4. Visual Studio、qmake 等工程配置文件；
-5. README、History、AGENTS 等项目文档。
+   the rule-test and console black-box test sources and scripts under the tests directory;
+4. benchmark 目录下的引擎对抗驱动、工具脚本与冻结的旧引擎副本；
+   the engine match drivers, tool scripts and frozen copies of earlier engines under the benchmark directory;
+5. Visual Studio、qmake 等工程配置文件；
+   project configuration files such as Visual Studio and qmake;
+6. NineChess/translations 目录下的界面译文源文件（.ts）与其编译产物（.qm）；
+   the UI translation sources (.ts) and their compiled catalogues (.qm) under NineChess/translations;
+7. README、History、AGENTS 等项目文档。
+   project documents such as README, History and AGENTS.
 
 对于原作者自行开发的代码与项目文件：
+For the code and project files developed by the original author:
+
 1. 任何人可以不经原作者另行授权，使用、修改和分发此代码，但必须继续保持 LGPL v3 协议，并保留原有版权声明和本许可说明；
+   anyone may use, modify and distribute this code without further authorisation from the original author, provided the LGPL v3 licence is kept and the original copyright notice and this licence statement are retained;
 2. 获得原作者商业授权者，按照双方书面协议执行。
+   anyone holding a commercial licence from the original author follows the written agreement between the parties.
 
 第三方依赖与资源：
+Third-party dependencies and resources:
+
 1. Qt 库、Qt 工具链和随运行环境分发的 Qt 组件归 Qt 版权方所有，并按 Qt 官方发布包所附许可执行；
+   the Qt libraries, the Qt toolchain and the Qt components distributed with the runtime belong to the Qt copyright holders and follow the licences shipped with the official Qt release;
 2. 编译器、Windows SDK、Visual Studio、MSVC 运行库等外部工具和运行库归各自权利人所有；
+   external tools and runtimes such as the compiler, the Windows SDK, Visual Studio and the MSVC runtime belong to their respective owners;
 3. 仓库内的图标、图片、声音、截图等资源随本项目用于构建、演示和发布 NineChess；如文件另有来源或许可声明，应按对应声明执行。
+   the icons, images, sounds, screenshots and other assets in this repository are used with this project to build, demonstrate and release NineChess; where a file carries its own origin or licence statement, that statement applies.
 
 本软件的可执行发布包：
+Executable release packages of this software:
+
 1. 其中包含的 Qt 库文件和外部运行库归对应版权方所有；
+   the Qt library files and external runtimes they contain belong to the respective copyright holders;
 2. 其余由原作者发布的可执行文件可以免费使用和传播，但不得用于违法用途；涉及商业使用时，请先取得原作者授权或按双方书面协议执行。
+   the remaining executables released by the original author may be used and redistributed free of charge, but must not be used for unlawful purposes; for commercial use, obtain authorisation from the original author first or follow the written agreement between the parties.
 
                 —— by liuweilhy 2018.05.21
-                —— updated 2026.04.26
+                —— updated 2026.09.15

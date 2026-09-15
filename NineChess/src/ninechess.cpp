@@ -171,6 +171,41 @@ const char* playerText(NineChess::Players player)
 
 } // namespace
 
+namespace {
+
+// 注入的文本翻译钩子。默认为空：此时原样返回源文本，
+// 因此控制台与自动化测试在没有界面层注入翻译时行为完全不变。
+NineChess::TextTranslator g_textTranslator;
+
+// 把 %1..%9 依次替换为实参。逐个参数替换，且替换后跳过已写入的片段，
+// 避免实参自身含 "%n" 形态文本时被后续轮次再次展开。
+std::string substituteTipArgs(const std::string &format, const std::vector<std::string> &args)
+{
+    std::string result = format;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string token = "%" + std::to_string(i + 1);
+        std::size_t pos = 0;
+        while ((pos = result.find(token, pos)) != std::string::npos) {
+            result.replace(pos, token.size(), args[i]);
+            pos += args[i].size();
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+void NineChess::setTextTranslator(TextTranslator translator)
+{
+    g_textTranslator = std::move(translator);
+}
+
+std::string NineChess::translateText(const std::string &source, const std::vector<std::string> &args)
+{
+    const std::string format = g_textTranslator ? g_textTranslator(source) : source;
+    return args.empty() ? format : substituteTipArgs(format, args);
+}
+
 const NineChess::Rule NineChess::rules[RULE_COUNT] = {
 {
     "成三棋",
@@ -364,7 +399,7 @@ std::string NineChess::getConsoleText(bool showMillHistory) const
         out << "当前选择: 无\n";
     }
 
-    out << "提示: " << m_tip << "\n";
+    out << "提示: " << getTip() << "\n";
     out << "最后命令: " << (m_cmdline.empty() ? "无" : m_cmdline) << "\n";
 
     if (!m_rule.allowRepeatedMills && showMillHistory) {
@@ -451,6 +486,7 @@ void NineChess::reset()
     m_cmdline.clear();
     m_cmdHistory.clear();
     m_tip = "未开局";
+    m_tipArgs.clear();
 }
 
 void NineChess::start()
@@ -1303,10 +1339,15 @@ void NineChess::setGameOver(Players winner, const std::string& tipText)
         winner == PLAYER1 ? PLAYER1 : (winner == PLAYER2 ? PLAYER2 : NOBODY));
     m_data.clearPendingCaptures();
     m_tip = tipText;
+    m_tipArgs.clear();
 }
 
 void NineChess::rebuildTip()
 {
+    // 提示文本以“模板 + 实参”的形式保存，翻译推迟到 getTip() 读取时进行，
+    // 这样切换界面语言后无需重新走子即可得到新语言的提示。
+    m_tipArgs.clear();
+
     if (m_data.getPhase() == GAME_OVER) {
         if (!m_tip.empty()) {
             return;
@@ -1328,26 +1369,31 @@ void NineChess::rebuildTip()
         return;
     }
 
-    const char* playerText = m_data.getTurn() == PLAYER1 ? "玩家1" : "玩家2";
+    // %1 恒为当前行动方；实参本身也要翻译（如 "玩家1" -> "Player 1"），
+    // 否则非中文界面里会夹着中文的玩家名。
+    m_tipArgs.push_back(translateText(m_data.getTurn() == PLAYER1 ? "玩家1" : "玩家2"));
     if (m_data.getPhase() == GAME_OPENING) {
         if (m_data.getAction() == ACTION_PLACE) {
             const uint32_t inHand = m_data.getTurn() == PLAYER1 ? m_data.getPlayer1InHand() : m_data.getPlayer2InHand();
-            m_tip = std::string("轮到") + playerText + "落子，剩余" + std::to_string(inHand) + "子";
+            m_tip = "轮到%1落子，剩余%2子";
+            m_tipArgs.push_back(std::to_string(inHand));
         }
         else {
-            m_tip = std::string("轮到") + playerText + "去子，需去" + std::to_string(m_data.getPendingCaptures()) + "子";
+            m_tip = "轮到%1去子，需去%2子";
+            m_tipArgs.push_back(std::to_string(m_data.getPendingCaptures()));
         }
         return;
     }
 
     if (m_data.getAction() == ACTION_CHOOSE) {
-        m_tip = std::string("轮到") + playerText + "选子移动";
+        m_tip = "轮到%1选子移动";
     }
     else if (m_data.getAction() == ACTION_PLACE) {
-        m_tip = std::string("轮到") + playerText + "落子";
+        m_tip = "轮到%1落子";
     }
     else {
-        m_tip = std::string("轮到") + playerText + "去子，需去" + std::to_string(m_data.getPendingCaptures()) + "子";
+        m_tip = "轮到%1去子，需去%2子";
+        m_tipArgs.push_back(std::to_string(m_data.getPendingCaptures()));
     }
 }
 

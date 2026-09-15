@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -193,8 +194,18 @@ public:
     //   "-0"               先手认输
     //   "-1"               后手认输
     //   "=="               外部裁定平局
-    // 返回当前局面的提示文本。
-    const std::string& getTip() const { return m_tip; }
+    // 返回当前局面的提示文本（已按占位符实参拼装，并在注入翻译钩子后按当前语言翻译）。
+    std::string getTip() const { return translateText(m_tip, m_tipArgs); }
+
+    // ==================== 文本翻译钩子 ====================
+    // 模型层不依赖 Qt：界面层可在启动时注入翻译函数，把源文本换成当前语言。
+    // 第一个参数是源文本（模板，可能含 %1..%9 占位符），返回译文；
+    // 未注入或未命中时原样返回源文本即可。控制台与测试不注入，行为保持不变。
+    using TextTranslator = std::function<std::string(const std::string &)>;
+    static void setTextTranslator(TextTranslator translator);
+    // 翻译源文本，并按顺序把 %1..%9 替换为 args（无翻译时同样完成替换）。
+    static std::string translateText(const std::string &source,
+        const std::vector<std::string> &args = std::vector<std::string>());
 
     // 返回最后一次成功执行的命令文本。
     const char* getCmdLine() const { return m_cmdline.c_str(); }
@@ -374,8 +385,11 @@ protected:
     // 完整命令历史。
     std::vector<std::string> m_cmdHistory;
 
-    // 当前局面的提示文本。
+    // 当前局面的提示文本模板（保留 %1..%9 占位符，翻译在读取时进行，
+    // 这样切换语言后无需重新走子即可得到新语言的提示）。
     std::string m_tip;
+    // m_tip 中占位符的实参。
+    std::vector<std::string> m_tipArgs;
 
 protected:
     // 重建整张邻接招法表。
