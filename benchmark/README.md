@@ -32,7 +32,7 @@ benchmark/
 ├── may_engine/                  2026-05-05 提交 d78811a 源码副本（namespace ncmay 隔离，
 │                                确认单线程、无 SearchOptions）
 ├── bin/                         编译产物（对局驱动 ×4 + 控制台/工具）
-├── build_*.bat                  自包含构建脚本（VS2019 v142，/O2 /utf-8）
+├── build_*.bat                  自包含构建脚本（MSVC：优先 VS2019 v142，缺失时回退 VS2022 v143；/O2 /utf-8）
 └── results/                     全部比赛数据与报告（见 results/RESULTS_INDEX.md）
     ├── RESULTS_INDEX.md         全部实验比分总表
     ├── run01..run08_*           2018版 vs 当前版 八轮随机配置实验（规则0×20局/轮）
@@ -45,7 +45,7 @@ benchmark/
 
 ## 构建与运行
 
-需要 VS2019（v142 工具集）。每个脚本自包含，可单独执行：
+需要 MSVC 工具链：优先 VS2019（v142），未安装时自动回退 VS2022（v143）。每个脚本自包含，可单独执行：
 
 ```bat
 build_benchmark.bat   &  bin\AIBenchmark.exe

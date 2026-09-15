@@ -2,7 +2,7 @@
 # ============================================================================
 # benchmark/linux/build.sh — 在 Linux/GCC 下构建三代引擎对抗基准
 #
-# 与 Windows 版（build_*.bat，VS2019 v142 /O2 /utf-8）等价：
+# 与 Windows 版（build_*.bat，MSVC v142/v143 /O2 /utf-8）等价：
 #   - 编译单元、宏、包含路径一一对应
 #   - 唯一新增的是 -I benchmark/linux（windows.h 兼容垫片）
 #   - 算法源码零改动

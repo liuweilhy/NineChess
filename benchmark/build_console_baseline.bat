@@ -3,6 +3,7 @@ rem Quick build of NineChessConsole (no Qt) for AI spot checks
 rem Usage after build: bin\NineChessConsole.exe
 setlocal
 set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+if not exist %VCVARS% set VCVARS="C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 call %VCVARS% >nul 2>&1
 if errorlevel 1 (echo Cannot load MSVC environment & exit /b 1)
 set CFLAGS=/nologo /c /O2 /EHsc /permissive- /utf-8 /W0 /D_CRT_SECURE_NO_WARNINGS /DNDEBUG /I..\NineChess\src
