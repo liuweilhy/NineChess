@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-- This repository contains two Visual Studio projects in `D:\My program\QT\NineChess\ninechess.sln`.
+- This repository contains three Visual Studio projects in `D:\My program\QT\NineChess\ninechess.sln`.
 - `NineChess` is the Qt GUI application.
 - `NineChessConsole` is the console harness for rule, command, and model regression testing.
+- `tests\RuleHarness.vcxproj` is the rule unit-test harness; it links only `NineChess\src\ninechess.cpp` (no Qt) and takes a rule index (0..3) as its argument, driven by `tests\Invoke-RuleHarness.ps1`.
+- The solution also holds two non-building `Solution Items` folders: `Solution Items` (root docs) and `benchmark` (benchmark drivers, tools and build scripts). Neither takes part in any build.
 
 ## Architecture Boundaries
 
@@ -51,11 +53,14 @@
 
 ## Encoding And Formatting
 
-- Save source, headers, markdown, and project text files as UTF-8 without BOM.
-- Use CRLF line endings for edited text files on Windows.
-- Do not add BOM to files that are already UTF-8 without BOM.
-- The project is configured to compile with `/utf-8`; keep edited source compatible with that setting.
-- `.editorconfig` and `.gitattributes` are part of the contract and should stay aligned with the source tree.
+- Encoding and line endings are split by file class. `.editorconfig` and `.gitattributes` are the executable form of this contract and must stay aligned with the tree.
+- Source and documentation (`*.cpp`, `*.h`, `*.pro`, `*.ui`, `*.qrc`, `*.ts`, `*.qtvscr`, `*.md`, `*.txt`, `*.bat`, `*.ps1`, ...): UTF-8 **without** BOM, CRLF. `benchmark/linux/*.sh` stays LF so it runs on Linux.
+- MSBuild/VS files (`*.sln`, `*.vcxproj`, `*.vcxproj.filters`, `*.vcxproj.user`, `*.props`, `*.targets`): UTF-8 **with** BOM, CRLF. MSBuild's `.sln` parser falls back to the system ANSI code page when the file has no BOM (the `HIGHCHAR` comment in `dotnet/msbuild` `SolutionFile.cs`), so keep the BOM and never rely on a BOM-less solution/project file to carry a non-ASCII name.
+- `*.rc`: UTF-16LE with **exactly one** BOM, CRLF — what the VS resource editor writes. It must stay `binary` in `.gitattributes`: marking it `text` makes git insert `0D` before every `0A` byte, which corrupts the file on checkout (the UTF-16 `0A` byte is often a character's high byte).
+- Git has no attribute for "force this encoding/BOM"; only line endings are machine-enforced. The BOM side is enforced by `.editorconfig` `charset` (for new files) plus review.
+- The frozen engine copies under `benchmark/old_engine/` and `benchmark/may_engine/` keep their original encoding (UTF-8 with BOM); do not re-encode or re-indent them.
+- `.qm`, `*.png`, `*.wav`, `*.ico` stay binary; never let a text conversion touch them.
+- The project is configured to compile with `/utf-8`, which also covers the BOM-less sources.
 
 ## Build Notes
 

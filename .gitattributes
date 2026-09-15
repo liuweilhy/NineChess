@@ -1,4 +1,25 @@
-# Normalize Windows project text files to CRLF in the working tree.
+# 行尾与编码约定的可执行部分。
+# 完整规则见 AGENTS.md 的 "Encoding And Formatting" 一节。
+#
+# 注意：git 没有"强制 BOM"或"强制 UTF-8/UTF-16"的属性（working-tree-encoding
+# 会改变库内存储编码，代价与风险都大，本仓库不使用）。因此：
+#   * 行尾（CRLF/LF）由本文件强制；
+#   * 编码与 BOM 由 .editorconfig 的 charset + 人工规范保证。
+
+# .rc 是 UTF-16LE + BOM（VS 资源编辑器固定写法）。绝对不能标记为 text：
+# 文本转换会在每个 0x0A 字节前插入 0x0D，而 UTF-16 里 0x0A 可能是字符的高位字节，
+# 结果是每个换行多出一个字符，文件在克隆/检出时就损坏了。
+*.rc binary
+
+# MSBuild/VS 工程与解决方案文件：UTF-8 + BOM + CRLF
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.vcxproj.user text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf
+
+# C/C++ 源码与工程文本：UTF-8 无 BOM + CRLF
 *.c text eol=crlf
 *.cc text eol=crlf
 *.cpp text eol=crlf
@@ -11,19 +32,22 @@
 *.ipp text eol=crlf
 *.pro text eol=crlf
 *.pri text eol=crlf
-*.vcxproj text eol=crlf
-*.vcxproj.filters text eol=crlf
-*.vcxproj.user text eol=crlf
-*.props text eol=crlf
-*.targets text eol=crlf
-*.sln text eol=crlf
 *.ui text eol=crlf
 *.qrc text eol=crlf
-*.rc text eol=crlf
 *.ts text eol=crlf
-# lrelease 生成的二进制翻译包，禁止任何换行/编码转换
-*.qm binary
+*.qtvscr text eol=crlf
+
+# 文档、脚本与测试数据：UTF-8 无 BOM + CRLF
 *.md text eol=crlf
+*.txt text eol=crlf
 *.toml text eol=crlf
 *.ini text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
 
+# Linux 构建脚本必须保持 LF，否则在 Linux 上会报 bad interpreter。
+*.sh text eol=lf
+
+# 二进制资源：禁止任何换行/编码转换（lrelease 生成的 .qm 在内）
+*.qm binary

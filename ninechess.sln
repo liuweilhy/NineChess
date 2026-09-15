@@ -1,10 +1,44 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 16
-VisualStudioVersion = 16.0.35731.53
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37628.2 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NineChessConsole", "NineChessConsole\NineChessConsole.vcxproj", "{6F563150-4FDE-4734-8A83-C31A0B267A17}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NineChess", "NineChess\ninechess.vcxproj", "{B0143907-0EE6-3EF5-94FE-728FE9FE5D32}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RuleHarness", "tests\RuleHarness.vcxproj", "{9C773041-8CB8-4E5B-9DD8-77E55F271F5A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{9FA3D6BD-1EC1-3BA5-80CB-CE02773A58D5}"
+	ProjectSection(SolutionItems) = preProject
+		AGENTS.md = AGENTS.md
+		AI_ALPHABETA.md = AI_ALPHABETA.md
+		AI_SUMMARY.md = AI_SUMMARY.md
+		History.txt = History.txt
+		Licence.txt = Licence.txt
+		Readme.md = Readme.md
+		Readme_cn.md = Readme_cn.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmark", "benchmark", "{7B2C1A44-9E3D-4C58-8A17-D2F6C0E5B931}"
+	ProjectSection(SolutionItems) = preProject
+		benchmark\README.md = benchmark\README.md
+		benchmark\benchmark.cpp = benchmark\benchmark.cpp
+		benchmark\benchmark_may.cpp = benchmark\benchmark_may.cpp
+		benchmark\benchmark_old_may.cpp = benchmark\benchmark_old_may.cpp
+		benchmark\benchmark_self.cpp = benchmark\benchmark_self.cpp
+		benchmark\depthprobe.cpp = benchmark\depthprobe.cpp
+		benchmark\evalprobe.cpp = benchmark\evalprobe.cpp
+		benchmark\replay_debug.cpp = benchmark\replay_debug.cpp
+		benchmark\test_oldmill.cpp = benchmark\test_oldmill.cpp
+		benchmark\build_benchmark.bat = benchmark\build_benchmark.bat
+		benchmark\build_may.bat = benchmark\build_may.bat
+		benchmark\build_oldmay.bat = benchmark\build_oldmay.bat
+		benchmark\build_self.bat = benchmark\build_self.bat
+		benchmark\build_tools.bat = benchmark\build_tools.bat
+		benchmark\build_console_baseline.bat = benchmark\build_console_baseline.bat
+		benchmark\linux\build.sh = benchmark\linux\build.sh
+		benchmark\results\RESULTS_INDEX.md = benchmark\results\RESULTS_INDEX.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -20,6 +54,10 @@ Global
 		{B0143907-0EE6-3EF5-94FE-728FE9FE5D32}.Debug|x64.Build.0 = Debug|x64
 		{B0143907-0EE6-3EF5-94FE-728FE9FE5D32}.Release|x64.ActiveCfg = Release|x64
 		{B0143907-0EE6-3EF5-94FE-728FE9FE5D32}.Release|x64.Build.0 = Release|x64
+		{9C773041-8CB8-4E5B-9DD8-77E55F271F5A}.Debug|x64.ActiveCfg = Debug|x64
+		{9C773041-8CB8-4E5B-9DD8-77E55F271F5A}.Debug|x64.Build.0 = Debug|x64
+		{9C773041-8CB8-4E5B-9DD8-77E55F271F5A}.Release|x64.ActiveCfg = Release|x64
+		{9C773041-8CB8-4E5B-9DD8-77E55F271F5A}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

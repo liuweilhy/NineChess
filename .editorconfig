@@ -1,12 +1,41 @@
 root = true
 
+# 编码约定（与 AGENTS.md、.gitattributes 保持一致）：
+#   * 源码、文档、脚本        -> UTF-8 无 BOM + CRLF
+#   * MSBuild/VS 工程与解决方案 -> UTF-8 带 BOM + CRLF
+#   * 资源脚本 *.rc            -> UTF-16LE 带 BOM + CRLF
+# 原因：MSBuild 解析 .sln 时若文件无 BOM，会回退到"系统 ANSI 代码页"
+# （dotnet/msbuild SolutionFile.cs 的 HIGHCHAR 注释），工程文件带 BOM 才能
+# 保证中文路径/名称在任何 Windows 代码页下都被正确解码。
+# 注意：EditorConfig 规范没有 utf-16le-bom 取值，UTF-16 只能用 utf-16le 表达；
+# 补齐 BOM 由 VS 资源编辑器自身保证。
+
+# C/C++ 源码：UTF-8 无 BOM + CRLF
 [*.{h,hpp,hxx,hh,c,cc,cpp,cxx,inl,ipp}]
 charset = utf-8
 end_of_line = crlf
 insert_final_newline = true
 
-[{*.pro,*.pri,*.vcxproj,*.vcxproj.filters,*.vcxproj.user,*.props,*.targets,*.sln,*.ui,*.qrc,*.rc,*.ts,*.md,*.toml,*.ini}]
+# MSBuild/VS 工程与解决方案文件：UTF-8 带 BOM + CRLF
+[*.{sln,vcxproj,props,targets,vcxproj.filters,vcxproj.user}]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+# Windows 资源脚本：UTF-16LE 带 BOM + CRLF
+[*.rc]
+charset = utf-16le
+end_of_line = crlf
+insert_final_newline = true
+
+# 其余工程/文档/脚本文本：UTF-8 无 BOM + CRLF
+[{*.pro,*.pri,*.ui,*.qrc,*.ts,*.qtvscr,*.md,*.txt,*.toml,*.ini,*.bat,*.cmd,*.ps1}]
 charset = utf-8
 end_of_line = crlf
 insert_final_newline = true
 
+# Linux 构建脚本必须保持 LF
+[*.sh]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
