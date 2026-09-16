@@ -27,6 +27,8 @@ benchmark/
 ├── depthprobe.cpp               工具：各局面/各深度真实耗时探测
 ├── replay_debug.cpp             工具：双模型逐命令回放比对（调试规则分歧用）
 ├── test_oldmill.cpp             工具：成三判定对照小测试（调试遗留）
+├── opening_analysis.py          工具：规则0棋谱开局活二(2连)堵点率统计（Python）
+├── spot_check.py                工具：棋谱局面引擎根分定点核对（驱动 Console search，Python）
 ├── old_engine/                  2018-12-23 提交 a588f4a 源码副本（namespace ncold 隔离，
 │                                仅宏/命名空间机械改动，零算法改动；其置换表在原码中即被注释停用）
 ├── may_engine/                  2026-05-05 提交 d78811a 源码副本（namespace ncmay 隔离，
@@ -39,6 +41,7 @@ benchmark/
     ├── may_vs_current/          5月版 vs 当前版（4规则×20局=80局）
     ├── may_vs_current_5s80/     5月版(d8) vs 9月版(d10) 后手视角修复后复测（2026-09-14，80局）
     ├── selfplay_r0_5s80/        9月版自对弈（规则0×20局，2026-09-14）
+    ├── selfplay_r0_blockprobe/  9月版自对弈开局活二堵点率验证（规则0×40局+定点核对，2026-09-17）
     ├── old2018_vs_may/          2018版 vs 5月版（规则0×20局，同深度8）
     └── evalab_A/B/C/            评估项隔离实验（纯最优 / 关winPressure / 再关pointValue）
 ```
@@ -69,6 +72,8 @@ AIBenchmarkSelf.exe [起始规则] [结束规则] [每规则局数] [深度] [�
 DepthProbe.exe      [规则] [棋谱文件] [前缀命令数]
 ReplayDebug.exe     [棋谱文件]
 EvalProbe.exe       [每配置随机对局数，默认 120]   评估评分标准验证：独立重算 §1.8 口径 vs 引擎 depth-0 静态评估
+opening_analysis.py <棋谱目录...>（python）        规则0棋谱开局活二(2连)堵点率统计
+spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（python）  该局面引擎根分定点核对
 ```
 
 对局机制约定（各驱动一致）：

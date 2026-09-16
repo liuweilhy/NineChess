@@ -1052,18 +1052,18 @@ void NineChessWindow::on_actionInvert_I_toggled(bool arg1)
     if (arg1)
     {
         // 设置玩家1和玩家2的标识图
-        ui.actionEngine1_T->setIcon(QIcon(":/icon/Resources/icon/White.png"));
-        ui.actionEngine2_R->setIcon(QIcon(":/icon/Resources/icon/Black.png"));
-        ui.picLabel1->setPixmap(QPixmap(":/icon/Resources/icon/White.png"));
-        ui.picLabel2->setPixmap(QPixmap(":/icon/Resources/icon/Black.png"));
+        ui.actionEngine1_T->setIcon(QIcon(":/icon/resources/icon/White.png"));
+        ui.actionEngine2_R->setIcon(QIcon(":/icon/resources/icon/Black.png"));
+        ui.picLabel1->setPixmap(QPixmap(":/icon/resources/icon/White.png"));
+        ui.picLabel2->setPixmap(QPixmap(":/icon/resources/icon/Black.png"));
     }
     else
     {
         // 设置玩家1和玩家2的标识图
-        ui.actionEngine1_T->setIcon(QIcon(":/icon/Resources/icon/Black.png"));
-        ui.actionEngine2_R->setIcon(QIcon(":/icon/Resources/icon/White.png"));
-        ui.picLabel1->setPixmap(QPixmap(":/icon/Resources/icon/Black.png"));
-        ui.picLabel2->setPixmap(QPixmap(":/icon/Resources/icon/White.png"));
+        ui.actionEngine1_T->setIcon(QIcon(":/icon/resources/icon/Black.png"));
+        ui.actionEngine2_R->setIcon(QIcon(":/icon/resources/icon/White.png"));
+        ui.picLabel1->setPixmap(QPixmap(":/icon/resources/icon/Black.png"));
+        ui.picLabel2->setPixmap(QPixmap(":/icon/resources/icon/White.png"));
     }
     // 让控制器改变棋子颜色
     game->setInvert(arg1);
