@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectPath = "D:\My program\QT\NineChess\NineChessConsole\NineChessConsole.vcxproj"
-$exePath = "D:\My program\QT\NineChess\NineChessConsole\x64\Debug\NineChessConsole.exe"
+$projectPath = "D:\My program\QT\NineChess\ninechess.sln"
+$exePath = "D:\My program\QT\NineChess\x64\Debug\NineChessConsole.exe"
 $tempDir = Join-Path $scriptRoot "tmp_console_blackbox"
 
 function Get-MSBuildPath {
@@ -39,7 +39,7 @@ function Build-NineChessConsole {
     $msbuildPath = Get-MSBuildPath
 
     Write-Host "== Build NineChessConsole =="
-    & $msbuildPath $projectPath /t:Build /p:Configuration=Debug /p:Platform=x64 /nologo
+    & $msbuildPath $projectPath /t:NineChessConsole /p:Configuration=Debug /p:Platform=x64 /nologo
     if ($LASTEXITCODE -ne 0) {
         throw ("NineChessConsole build failed with exit code {0}." -f $LASTEXITCODE)
     }

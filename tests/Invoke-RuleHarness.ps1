@@ -28,12 +28,13 @@ function Get-MSBuildPath {
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectPath = Join-Path $scriptRoot "RuleHarness.vcxproj"
-$exePath = Join-Path $scriptRoot "bin\x64\Debug\RuleHarness.exe"
+$solutionDir = Split-Path -Parent $scriptRoot
+$solutionPath = Join-Path $solutionDir "ninechess.sln"
+$exePath = Join-Path $solutionDir "x64\Debug\RuleHarness.exe"
 $msbuildPath = Get-MSBuildPath
 
 Write-Host ("== Build RuleHarness ({0}) ==" -f $RuleName)
-& $msbuildPath $projectPath /t:Build /p:Configuration=Debug /p:Platform=x64 /nologo
+& $msbuildPath $solutionPath /t:RuleHarness /p:Configuration=Debug /p:Platform=x64 /nologo
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

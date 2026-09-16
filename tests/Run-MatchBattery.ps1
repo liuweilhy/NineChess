@@ -18,8 +18,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectPath = "D:\My program\QT\NineChess\NineChessConsole\NineChessConsole.vcxproj"
-$exePath = "D:\My program\QT\NineChess\NineChessConsole\x64\Release\NineChessConsole.exe"
+$projectPath = "D:\My program\QT\NineChess\ninechess.sln"
+$exePath = "D:\My program\QT\NineChess\x64\Release\NineChessConsole.exe"
 $tempDir = Join-Path $scriptRoot "tmp_match_battery"
 
 function U {
@@ -51,7 +51,7 @@ function Get-MSBuildPath {
 
 if (-not $SkipBuild) {
     Write-Host "== Build NineChessConsole (Release) =="
-    & (Get-MSBuildPath) $projectPath /t:Build /p:Configuration=Release /p:Platform=x64 /nologo /v:minimal
+    & (Get-MSBuildPath) $projectPath /t:NineChessConsole /p:Configuration=Release /p:Platform=x64 /nologo /v:minimal
     if ($LASTEXITCODE -ne 0) {
         throw "NineChessConsole build failed."
     }

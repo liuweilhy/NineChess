@@ -64,6 +64,8 @@
 
 ## Build Notes
 
+- All three projects are x64-only; do not reintroduce Win32 configurations. The exes (NineChess.exe, NineChessConsole.exe, RuleHarness.exe) build into the unified solution-level `<solution root>\x64\Debug|Release\`; intermediate files stay per-project (`NineChess\debug|release`, `NineChessConsole\Debug|Release`, `tests\Debug|Release`). NineChess keeps its intermediate dir lowercase `debug`/`release` because the QtMoc moc_predefs.h path and include dirs reference it.
+- Test scripts (`tests\Invoke-RuleHarness.ps1`, `tests\Run-ConsoleBlackBoxTests.ps1`, `tests\Run-MatchBattery.ps1`) build solution targets (`msbuild ninechess.sln /t:RuleHarness|NineChessConsole ...`), never the standalone vcxproj — building a vcxproj directly leaves `$(SolutionDir)` undefined and the exe lands in the project folder instead of the unified output dir.
 - The GUI project currently uses Qt 5.15.2 (`msvc2019_64`) with MSVC toolset `v143` (VS2022; switched from `v142` in 2026-09).
 - `D:\My program\QT\NineChess\NineChess\ninechess.pro` is kept in sync with the MSBuild project for source lists and `/utf-8`.
 - For quick model sanity checks, prefer `NineChessConsole` before changing GUI behavior.
