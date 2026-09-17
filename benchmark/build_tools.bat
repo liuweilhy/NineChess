@@ -15,11 +15,13 @@ if not exist bin mkdir bin
 if not exist obj\old\ninechess.obj (cl %CFLAGS% /Fo:obj\old\ old_engine\ninechess.cpp old_engine\ninechessai_ab.cpp)
 if not exist obj\new\ninechess.obj (cl %CFLAGS% /Fo:obj\new\ ..\NineChess\src\ninechess.cpp ..\NineChess\src\ninechess_ai_ab.cpp ..\NineChess\src\ninechess_symmetry.cpp)
 if not exist obj\may\ninechess.obj (cl %CFLAGS% /Fo:obj\may\ may_engine\ninechess.cpp may_engine\ninechess_ai_ab.cpp)
-cl %CFLAGS% /Fo:obj\tools\ depthprobe.cpp replay_debug.cpp test_oldmill.cpp evalprobe.cpp
+cl %CFLAGS% /Fo:obj\tools\ depthprobe.cpp replay_debug.cpp test_oldmill.cpp evalprobe.cpp evalab_row.cpp vs_head.cpp
 if errorlevel 1 exit /b 1
 link /nologo /OUT:bin\DepthProbe.exe /SUBSYSTEM:CONSOLE obj\tools\depthprobe.obj obj\old\ninechess.obj obj\old\ninechessai_ab.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
 link /nologo /OUT:bin\ReplayDebug.exe /SUBSYSTEM:CONSOLE obj\tools\replay_debug.obj obj\old\ninechess.obj obj\old\ninechessai_ab.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
 link /nologo /OUT:bin\TestMill.exe /SUBSYSTEM:CONSOLE obj\tools\test_oldmill.obj obj\old\ninechess.obj obj\new\ninechess.obj
 link /nologo /OUT:bin\EvalProbe.exe /SUBSYSTEM:CONSOLE obj\tools\evalprobe.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
-echo Build OK: bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe
+link /nologo /OUT:bin\EvalAbRow.exe /SUBSYSTEM:CONSOLE obj\tools\evalab_row.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
+link /nologo /OUT:bin\VsHead.exe /SUBSYSTEM:CONSOLE obj\tools\vs_head.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
+echo Build OK: bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe bin\EvalAbRow.exe bin\VsHead.exe
 endlocal

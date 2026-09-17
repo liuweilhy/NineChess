@@ -44,24 +44,27 @@ public:
     // 按规则的评估权重表：一份结构收拢全部评估魔数，四套规则各占一行，
     // 调参战役（tests/Run-MatchBattery.ps1）按行独立进行，互不干扰。
     // 修改任何数值都会改变评估结果；新增评估项应同步在此表加列。
+    // 结构默认见 ninechess_ai_ab.cpp 的 s_evalWeightsPerRule（2026-09-15 起按规则差异化）。
     struct EvalWeights {
         int32_t openingMaterial = 120;   // 开局：在盘子差
         int32_t openingInHand = 48;      // 开局：手牌差
-        int32_t openingMill = 96;        // 开局：可提三连
+        int32_t openingMill = 96;        // 开局：可提三连（规则2 编号登记下恒0，表中为0）
         int32_t openingOpenMill = 24;    // 开局：活二
         int32_t midMaterial = 180;       // 中局：在盘子差
-        int32_t midMill = 112;           // 中局：可提三连
+        int32_t midMill = 112;           // 中局：可提三连（规则2 编号登记下恒0，表中为0）
         int32_t midOpenMill = 32;        // 中局：活二
         int32_t midMobility = 10;        // 中局：机动性
         int32_t captureOpening = 160;    // 提子阶段（开局）每个待提子
         int32_t captureMid = 220;        // 提子阶段（中局）每个待提子
         int32_t forkThreat = 0;          // 双三连威胁：≥2 个互不相同成三点的额外加分
-                                         // （成三点数每多 1 个加一份；同点双活二不算）
+                                         // （成三点数每多 1 个加一份；同点双活二不算；
+                                         // 表默认 0，A/B 实测 ft=80 偏负）
         int32_t stalematePressure = 0;   // 被闷杀压力：中局对手机动性 ≤3 时每少一步的加分
-                                         // （blockedIsLoss 规则收益最大；默认 0 待 A/B 定值）
+                                         // （规则0 表默认 20，两轮 A/B 为正；其余规则 0。
+                                         // 规则3 试 20 不显著，规则1 试 20 偏负）
         int32_t millSafety = 0;          // 封闭三连保护：处于己方（当前）三连中的棋子数差
-                                         // 的加分。三连中的子按规则不可被提（除非全在三连），
-                                         // 是真实的子力安全度量；默认 0 待 A/B 定值。
+                                         // 的加分。三连中的子按规则不可被提（除非全在三连）。
+                                         // （表默认 0；2026-09-15 曾试 16/32，A/B 偏负已回退）
     };
 
     // 搜索配置。setOptions() 修改后，对后续每次搜索生效。

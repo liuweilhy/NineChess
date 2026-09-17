@@ -46,7 +46,7 @@ static inline int clampScore(int value, int lo, int hi)
 // ============ 评分标准的独立实现（严格按文档 §1.8，P1 视角） ============
 
 struct SpecConfig {
-    // EvalWeights 默认行。
+    // EvalWeights 默认行（历史公共行作基底；按规则覆盖见 specConfigForRule）。
     int openingMaterial = 120, openingInHand = 48, openingMill = 96, openingOpenMill = 24;
     int midMaterial = 180, midMill = 112, midOpenMill = 32, midMobility = 10;
     int captureOpening = 160, captureMid = 220;
@@ -55,7 +55,63 @@ struct SpecConfig {
     int pointValueWeight = 16;
     int winPressureWeight = 150;
     bool taperedEval = false;
+    // true 时用上面的 stalemate/fork/millSafety 覆盖规则表行（“休眠项启用”配置）。
+    bool forceDormantOverride = false;
 };
+
+// 与 ninechess_ai_ab.cpp 的 s_evalWeightsPerRule 保持同步。
+// 改引擎权重表时必须同步此处，否则默认配置 fuzz 会系统性 MISMATCH。
+static SpecConfig specConfigForRule(uint32_t ruleIndex)
+{
+    SpecConfig cfg;
+    if (ruleIndex <= 1u || ruleIndex == 3u) {
+        // 用户 WORK 行（0/1/3）
+        cfg.openingMaterial = 128;
+        cfg.openingInHand = 160;
+        cfg.openingMill = 180;
+        cfg.openingOpenMill = 64;
+        cfg.midMaterial = 128;
+        cfg.midMill = 180;
+        cfg.midOpenMill = 64;
+        cfg.captureOpening = 160;
+        cfg.captureMid = 180;
+        cfg.forkThreat = 180;
+        cfg.stalematePressure = 400;
+        if (ruleIndex == 3u) {
+            cfg.midMobility = 24;
+        }
+    }
+    else if (ruleIndex == 2u) {
+        // 规则2 收紧行
+        cfg.openingMaterial = 128;
+        cfg.openingInHand = 160;
+        cfg.openingMill = 0;
+        cfg.openingOpenMill = 64;
+        cfg.midMaterial = 180;
+        cfg.midMill = 0;
+        cfg.midOpenMill = 64;
+        cfg.captureOpening = 160;
+        cfg.captureMid = 220;
+        cfg.forkThreat = 0;
+        cfg.stalematePressure = 0;
+    }
+    return cfg;
+}
+
+// 规则表行 + 调用方覆盖项 → 最终用于 specEval 的配置。
+static SpecConfig resolveSpecConfig(uint32_t ruleIndex, const SpecConfig& overrides)
+{
+    SpecConfig cfg = specConfigForRule(ruleIndex);
+    cfg.pointValueWeight = overrides.pointValueWeight;
+    cfg.winPressureWeight = overrides.winPressureWeight;
+    cfg.taperedEval = overrides.taperedEval;
+    if (overrides.forceDormantOverride) {
+        cfg.stalematePressure = overrides.stalematePressure;
+        cfg.forkThreat = overrides.forkThreat;
+        cfg.millSafety = overrides.millSafety;
+    }
+    return cfg;
+}
 
 struct Breakdown {
     int phaseT = 0;
@@ -298,20 +354,19 @@ static std::vector<ScenarioResult> runScenarios(NineChess_AI_AB& ai)
     };
 
     // 场景 1：规则 2 摆子阶段 2:1 子差（全角点）。
-    // 在盘差 +1×120；手牌差 -1×48；点位价值 (2+2-2)×16=32（直棋规则每点 2 线）。
+    // 当前规则2 行：在盘 +1×128；手牌 -1×160；点位价值 (2+2-2)×16=32 → 0。
     {
         ProbeChess chess;
         chess.setRule(2);
         chess.command("(0,0)");
         chess.command("(0,4)");
         chess.command("(0,2)");
-        check("S1 规则2开局 2:1 子差(全角点)", 120 - 48 + 32,
+        check("S1 规则2开局 2:1 子差(全角点)", 128 - 160 + 32,
             engineEval(ai, chess, baseOptions()));
     }
 
-    // 场景 2：规则 0 摆子阶段成三待提（规则 0 允许重复提子，站立三连计入可提）。
-    // 三连线 = (0,7)(0,0)(0,1)（边中-角-边中）。在盘差 +1×120；手牌差 -1×48；
-    // 可提三连 +1×96；点位价值 2×16=32；提子阶段（开局价）+1×160。
+    // 场景 2：规则 0 摆子阶段成三待提（当前规则0 行 WORK）。
+    // 在盘 +1×128；手牌 -1×160；可提三连 +1×180；点位价值 2×16=32；提子 +1×160。
     {
         ProbeChess chess;
         chess.setRule(0);
@@ -320,12 +375,12 @@ static std::vector<ScenarioResult> runScenarios(NineChess_AI_AB& ai)
         chess.command("(0,0)");
         chess.command("(2,4)");
         chess.command("(0,1)");
-        check("S2 规则0开局成三待提 1 子", 120 - 48 + 96 + 32 + 160,
+        check("S2 规则0开局成三待提 1 子", 128 - 160 + 180 + 32 + 160,
             engineEval(ai, chess, baseOptions()));
     }
 
-    // 场景 3：同局面换规则 2（九连棋：三连在成形瞬间已登记历史，
-    // 站立三连不再计入"可提三连"，故无 +96 项）。
+    // 场景 3：同局面规则 2（mill 列为 0，已登记不计可提）。
+    // 在盘 +1×128；手牌 -1×160；点位 32；提子 +1×160 → 160。
     {
         ProbeChess chess;
         chess.setRule(2);
@@ -334,7 +389,7 @@ static std::vector<ScenarioResult> runScenarios(NineChess_AI_AB& ai)
         chess.command("(0,0)");
         chess.command("(2,4)");
         chess.command("(0,1)");
-        check("S3 规则2开局成三待提(已登记不计可提)", 120 - 48 + 32 + 160,
+        check("S3 规则2开局成三待提(已登记不计可提)", 128 - 160 + 32 + 160,
             engineEval(ai, chess, baseOptions()));
     }
 
@@ -361,9 +416,10 @@ static bool runFuzz(NineChess_AI_AB& ai, const char* configName,
                 break;
             }
 
-            // 文档口径重算 vs 引擎 depth-0 静态评估。
+            // 文档口径重算 vs 引擎 depth-0 静态评估（按规则取表行 + 配置覆盖）。
             Breakdown bd;
-            const int expected = specEval(chess, cfg, bd);
+            const SpecConfig row = resolveSpecConfig(chess.getRuleIndex(), cfg);
+            const int expected = specEval(chess, row, bd);
             const int actual = engineEval(ai, chess, opts);
             const uint32_t ruleIdx = chess.getRuleIndex();
             ++g_statesSeen[ruleIdx];
@@ -482,22 +538,23 @@ int main(int argc, char** argv)
     }
 
     std::printf("== 随机对局逐手比对 ==\n");
-    // 配置 0：全默认（winPressure=150、pointValue=16、休眠项 0、硬切换）。
+    // 配置 0：全默认（winPressure=150、pointValue=16、表内项按规则行、硬切换）。
     {
         NineChess_AI_AB::SearchOptions opts = baseOptions();
         ok = runFuzz(ai, "默认", opts, SpecConfig{}, games, rng) && ok;
     }
-    // 配置 1：休眠项启用（被闷杀 60 / 双三 80 / 三连保护 20）。
+    // 配置 1：休眠项覆盖（被闷杀 60 / 双三 80 / 三连保护 20，压过规则表行）。
     {
         NineChess_AI_AB::SearchOptions opts = baseOptions();
         opts.stalematePressureWeight = 60;
         opts.forkThreatWeight = 80;
         opts.millSafetyWeight = 20;
         SpecConfig cfg;
+        cfg.forceDormantOverride = true;
         cfg.stalematePressure = 60;
         cfg.forkThreat = 80;
         cfg.millSafety = 20;
-        ok = runFuzz(ai, "休眠项启用", opts, cfg, games, rng) && ok;
+        ok = runFuzz(ai, "休眠项覆盖", opts, cfg, games, rng) && ok;
     }
     // 配置 2：连续博弈插值。
     {
