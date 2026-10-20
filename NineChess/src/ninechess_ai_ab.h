@@ -45,17 +45,27 @@ public:
     // 调参战役（tests/Run-MatchBattery.ps1）按行独立进行，互不干扰。
     // 修改任何数值都会改变评估结果；新增评估项应同步在此表加列。
     // 结构默认见 ninechess_ai_ab.cpp 的 s_evalWeightsPerRule（2026-09-15 起按规则差异化）。
+    //
+    // 2026-10：前 10 列默认值改为与"规则 0 生产行"一致；后 3 列的结构默认值仍是 0，
+    // 但生产表行里规则 0/1/3 的 forkThreat=180、stalematePressure=400（规则2 两者皆 0），
+    // 所以这里只是"未覆盖时的安全基线"，不是各规则的实际取值——实际取值只看
+    // s_evalWeightsPerRule（AI_ALPHABETA.md §2.5）。
+    // 旧默认（120/48/96/24…）与表值脱节，任何只改几列的 useCustomWeights 行都会
+    // 悄悄带回另一套基线（与 evalab_*/CORRECTION.md 记录的事故同型）。改表行时请同步这里。
     struct EvalWeights {
-        int32_t openingMaterial = 120;   // 开局：在盘子差
-        int32_t openingInHand = 48;      // 开局：手牌差
-        int32_t openingMill = 96;        // 开局：可提三连（规则2 编号登记下恒0，表中为0）
-        int32_t openingOpenMill = 24;    // 开局：活二
-        int32_t midMaterial = 180;       // 中局：在盘子差
-        int32_t midMill = 112;           // 中局：可提三连（规则2 编号登记下恒0，表中为0）
-        int32_t midOpenMill = 32;        // 中局：活二
+        int32_t openingMaterial = 128;   // 开局：在盘子差
+        int32_t openingInHand = 160;     // 开局：手牌差（含"在盘可被提、手牌安全"的节拍溢价）
+        int32_t openingMill = 180;       // 开局：可提三连（规则2 编号登记下恒0，表中为0）
+        int32_t openingOpenMill = 64;    // 开局：活二
+        int32_t midMaterial = 128;       // 中局：在盘子差
+        int32_t midMill = 180;           // 中局：可提三连（规则2 编号登记下恒0，表中为0）
+        int32_t midOpenMill = 64;        // 中局：活二
         int32_t midMobility = 10;        // 中局：机动性
-        int32_t captureOpening = 160;    // 提子阶段（开局）每个待提子
-        int32_t captureMid = 220;        // 提子阶段（中局）每个待提子
+        int32_t captureOpening = 160;   // 提子阶段（开局）每个待提子
+        int32_t captureMid = 180;       // 提子阶段（中局）每个待提子
+                                        // （2026-10 冲刺1 曾改 128/128"与在盘同价"，
+                                        // 其 A/B 验证被实证净负的 MDP 污染，
+                                        // 冲刺2 回退 2026-09 表值；再改须按新对战规范单变量重测）
         int32_t forkThreat = 0;          // 双三连威胁：≥2 个互不相同成三点的额外加分
                                          // （成三点数每多 1 个加一份；同点双活二不算；
                                          // 表默认 0，A/B 实测 ft=80 偏负）
@@ -77,14 +87,51 @@ public:
         int32_t randomGap = 16;    // 随机候选集与最优的分差阈值（估值单位）；
                                    // 分差 ≤ 该值的走法进入随机候选（2026-09-14 起为闭区间，
                                    // 旧实现为严格小于，分差恰等于阈值的招法曾被漏掉）。
-        int32_t randomPlies = 10;  // 仅根局面已走命令数 < N 时启用根随机，之后恢复纯最优；
-                                    // 0 = 不限制（全程随机，行为与旧版一致）。开局对称
-                                    // 等价着法多、随机损失小；中残局每一手都关键。
+        int32_t randomGapMid = 0;  // 全程层（randomPlies 之后）的分差阈值；0 = 仅精确同分
+                                   // （2026-10 起为默认）。>0 时中局/残局也把"得分接近"的
+                                   // 走法纳入随机候选（组间 softmax、组内均匀）。
+                                   // 历史上全程 gap 随机（randomPlies=0，gap 30/60）在规则0
+                                   // 0:24 惨败，故只提供小值档（建议 ≤8）并须 A/B 验证。
+        int32_t randomPlies = 10;  // 根随机的两层策略分界（2026-10 重构）：
+                                    // 前 N 条命令内 = 开局层，候选为"根方视角分差 ≤ gap"
+                                    // 的走法（softmax 加权），是多样性的主力；
+                                    // 之后 = 全程层，候选收窄为**精确同分**的走法
+                                    // （含对称等价局面下的等价着法）均匀随机——零强度损失，
+                                    // 保证等价局面上不会永远落子在同一处。
+                                    // 0 = 全程按 gap 窗口随机（旧版行为，强度代价大，
+                                    // 规则0 对 HEAD 0:24 惨败后弃用为默认）。
+        bool randomTieLayer = true;     // 全程"精确同分随机"层开关（A/B 用）；
+                                        // false = 超过 randomPlies 后恢复纯最优（旧版行为）。
+        bool randomTieAcrossGroups = true;
+                                        // 全程同分层是否跨等价类抽签（2026-10 新增，默认开=旧行为）：
+                                        // true = 所有精确同分走法均匀随机；
+                                        // false = 只在"最优值且互为等价"的组内均匀随机。
+                                        // 实测两规则响应相反：规则1 −9→+11（40 局），
+                                        // 规则3 −19/46（两种子）而旧行为 +1/47 → 净负，
+                                        // 保持 true；开关留给按规则单独实验。
+        bool rootPvOrdering = true;     // 根节点 PV 排序（上一迭代根走法分数排序，2026-10
+                                        // sprint1 引入）；false = 退回纯静态序（A/B 用）。
         HashMode hashMode = HashMode::OpeningCanonical;
         uint64_t seed = 0;          // 随机种子；0 = 每次随机
         int32_t pointValueWeight = 16;  // 点位结构价值权重；0 = 关闭（A/B 用）
         bool aspirationWindows = true;  // 根窗口随上一迭代估值收窄，失败时渐进放宽重搜
         int32_t repetitionPenalty = 40; // 搜索内 2~8 层重复局面的惩罚分；0 = 关闭
+        int32_t repetitionLeadScale = 0;
+                                        // 领先时的重复惩罚加权（2026-10，0 = 关）：
+                                        // 重复节点的罚分 = clamp(repetitionPenalty +
+                                        // 轮走方静态估值/4, 0, 本值)。领先方重复代价更大，
+                                        // 落后方重复几乎不罚（下限 0）。上限建议 300~600。
+        int32_t flyingMobilityWhenBehind = -1;
+                                        // 飞子方机动性折减（2026-10，-1 = 关；千分比，
+                                        // 如 667 = 折为 2/3）：仅当飞子方总子力不占优时生效，
+                                        // 抑制"故意掉到 3 子换飞子"的估值诱导（规则3）。
+        bool parallelRootScoring = true;
+                                        // 根随机层并行（2026-10，默认开）：精确打分阶段的
+                                        // 各等价组代表搜索用独立 SearchContext 并行执行
+                                        // （TT 仍共享、分片加锁）。只并行"组代表搜索"，
+                                        // 最优组重推必须先行（各组窗口以它的精确值为基准）。
+                                        // 规则2 实测：分数噪声内持平（10:11:19），
+                                        // 但超时 8→0、总搜索耗时 263s→143s。A/B 用开关。
         bool quiescenceSearch = true;   // 深度 0 时展开“形成三连/提子”的静默搜索
         bool dynamicDepth = true;       // 中局根局面在指定深度上追加 2 层：
                                         // 中局分支数远小于开局，等深度下耗时差百倍，
@@ -99,10 +146,22 @@ public:
                                         // 节点深度不减 1（提子链有界：盘面子数单调递减），
                                         // 让战术交换在主搜索内算清而不是留给静默搜索。
                                         // 只在浅层（depth <= 2）延伸，避免深层节点膨胀。
+        bool lmrFullWindowVerification = true;
+                                        // LMR 复验窗口（2026-10 简化）：true = 减搜后
+                                        // 触发复验时直接用全窗口 (alpha, beta) 全深搜索，
+                                        // 并跳过随后的 PVS 全窗重搜（原先为"全深零宽复验
+                                        // + 全深全窗重搜"两次遍历）；false = 旧行为。
+                                        // 只合并遍历次数，不改变 minimizer 侧
+                                        // "对已拒绝走法做全深复验"的保险语义。
+                                        // A/B 开关（VsHeadCode 的 newLmr）。
         bool lateMoveReductions = true; // LMR：排序靠后（i >= 4）、深度 >= 3 的静默走法
                                         // （不成三、非提子、无 TT/杀手/高历史加成）
                                         // 先减 1~2 层试探，失败高再恢复全深重搜。
                                         // 开局分支 ~24、中局 ~8-10，是 PVS 之后的主要节点收益来源。
+                                        // 重搜触发两侧同为 value > alpha：本游戏的 tempo 敏感
+                                        // 局面里浅层减搜 fail-high 系统性乐观，minimizer 对
+                                        // "被拒"走法的全深度复验是强度保险——对战实证定稿，
+                                        // 改"对称"语义会溃败（AI_ALPHABETA.md §1.4、sprint2 报告）。
         int32_t stalematePressureWeight = -1; // 被闷杀压力覆盖值；<0 = 用规则权重表默认值
                                               // （vs 命令的 sp 参数 A/B 用）。
         int32_t forkThreatWeight = -1;        // 双三连威胁覆盖值；<0 = 用规则权重表默认值
@@ -268,7 +327,9 @@ private:
     struct TTStore {
         static constexpr size_t SHARD_COUNT = 256;
 
-        // 每分片桶数（2048 桶 × 2 槽 × 256 分片 = 1M 条）。
+        // 每分片桶数（2048 桶 × 2 槽 × 256 分片 = 1M 条，16MB）。
+        // 2026-10 曾试扩容 8192 桶（4M 条/64MB）：等权消融节点 −26%，未做强度
+        // A/B 即撤回，暂维持 1M；扩容列为后续实验项（须先 isolate 再按规范对战）。
         static constexpr size_t BUCKET_COUNT = 2048;
         static constexpr size_t BUCKET_SLOTS = 2;
         static_assert((BUCKET_COUNT & (BUCKET_COUNT - 1)) == 0,
@@ -494,8 +555,11 @@ private:
 
     // 按动态排序键对走法排序；根节点额外优先沿用上一层最优着法，
     // 并（在 canonical 模式下）按对称等价类分组，使同类走法相邻。
+    // prevScores（可空）：上一迭代的根走法分数（P1 视角），根节点据此做 PV 排序。
+    // 只看分数排序、不参与选择，因此与根节点随机性不冲突（随机在打分后独立进行）。
     void orderMoves(SearchContext& ctx, MoveList& list, bool isRoot,
-        const Move& ttMove, int ply) const;
+        const Move& ttMove, int ply,
+        const std::vector<std::pair<Move, int>>* prevScores = nullptr) const;
 
     // 计算单个走法的完整排序键（静态启发 + TT 走法/杀手/历史加成）。
     // 每个走法只调用一次，结果写回 move.order，排序阶段纯整数比较。
@@ -592,8 +656,10 @@ private:
         uint32_t inMillMask = 0; // 处于己方三连中的棋子掩码
     };
 
+    // collectExtras：是否顺带统计成三点/三连掩码（仅 forkThreat / millSafety
+    // 非 0 时才需要；默认权重下这两项为 0，省掉每条线的两次位运算）。
     void countMillsBothSides(SearchContext& ctx, uint32_t occupied,
-        MillScan& outP1, MillScan& outP2) const;
+        MillScan& outP1, MillScan& outP2, bool collectExtras) const;
 
     // 判断某一方在指定三连线上形成的三连，是否已登记在历史中。
     bool isMillKeyInHistory(SearchContext& ctx, NineChess::Players player, uint32_t lineId) const;

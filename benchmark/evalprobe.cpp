@@ -65,7 +65,7 @@ static SpecConfig specConfigForRule(uint32_t ruleIndex)
 {
     SpecConfig cfg;
     if (ruleIndex <= 1u || ruleIndex == 3u) {
-        // 用户 WORK 行（0/1/3）
+        // 用户 WORK 行（0/1/3），2026-10 冲刺2 回退 2026-09-15 表（=HEAD）
         cfg.openingMaterial = 128;
         cfg.openingInHand = 160;
         cfg.openingMill = 180;
@@ -82,7 +82,7 @@ static SpecConfig specConfigForRule(uint32_t ruleIndex)
         }
     }
     else if (ruleIndex == 2u) {
-        // 规则2 收紧行
+        // 规则2 收紧行，2026-10 冲刺2 回退 2026-09-15 表（=HEAD）
         cfg.openingMaterial = 128;
         cfg.openingInHand = 160;
         cfg.openingMill = 0;
@@ -365,7 +365,7 @@ static std::vector<ScenarioResult> runScenarios(NineChess_AI_AB& ai)
             engineEval(ai, chess, baseOptions()));
     }
 
-    // 场景 2：规则 0 摆子阶段成三待提（当前规则0 行 WORK）。
+    // 场景 2：规则 0 摆子阶段成三待提（当前规则0 行 WORK，2026-10 冲刺2 = 2026-09 表）。
     // 在盘 +1×128；手牌 -1×160；可提三连 +1×180；点位价值 2×16=32；提子 +1×160。
     {
         ProbeChess chess;

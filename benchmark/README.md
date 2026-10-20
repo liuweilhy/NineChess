@@ -4,6 +4,11 @@
 纯命令流格式（UTF-8 无 BOM，首行 `r<规则>s<限步>t0`，0-based 坐标），可在
 `NineChessConsole` / GUI 中直接回放。
 
+> **当前状态（2026-10-20）**：候选（工作区）相对 `42980e5`，4 规则 × 20 局/边 × 3 个样本
+> 合计 **165:146:169（候选:HEAD:和，+19/311 决胜）**；规则2 +19/73 最稳，规则1 −16/112
+> 是唯一一致弱项。已采纳：LMR 全窗复验合并、根走法等价类分组、根随机层并行。
+> 详见 `results/sprint3_2026-10/REPORT.md`。
+
 ## 引擎版本称谓
 
 - **2018版**：提交 a588f4a 的引擎副本（`old_engine/`，namespace ncold）。
@@ -14,6 +19,9 @@
   含后手根随机视角修复、GUI 默认深度 10 / randomGap 16。
   该称谓只在 benchmark 语境内使用（结果报告、索引、与 AI Agent 的对话）；
   源码与算法文档仍称"当前版/新引擎"。
+- **9月版基线（2026-10 起）**：提交 `42980e5`（2026-09-18），冻结为 `head_engine/`
+  （namespace `nchead`）。2026-10 的代码级 A/B 一律以它为基准；工作区候选 =
+  该基线 + 当轮改动（另含 sprint2 收尾差异，sprint2 报告测得 54:37:69 持平）。
 
 ## 目录结构
 
@@ -25,6 +33,10 @@ benchmark/
 ├── benchmark_old_may.cpp        驱动③：2018版 vs 2026-05版
 ├── benchmark_self.cpp           驱动④：当前引擎自对弈（先后手胜率/和棋率测量）
 ├── depthprobe.cpp               工具：各局面/各深度真实耗时探测
+├── orderprobe.cpp               工具：确定性节点/耗时对照（与评估无关的热身走子，验证排序/剪枝改动；OrderProbeHead.exe = 同探测跑 HEAD 快照引擎）
+├── evalprobe.cpp                工具：评估口径验证（独立重算 vs 引擎 depth-0）
+├── evalab_row.cpp               工具：评估权重单变量 A/B（variant 0-8，可带时限/步数上限）
+├── vs_head_engine.cpp           驱动：代码级对抗（工作区引擎 vs git-HEAD 引擎快照，见「AI Agent 对战规范」）
 ├── replay_debug.cpp             工具：双模型逐命令回放比对（调试规则分歧用）
 ├── test_oldmill.cpp             工具：成三判定对照小测试（调试遗留）
 ├── opening_analysis.py          工具：规则0棋谱开局活二(2连)堵点率统计（Python）
@@ -33,6 +45,8 @@ benchmark/
 │                                仅宏/命名空间机械改动，零算法改动；其置换表在原码中即被注释停用）
 ├── may_engine/                  2026-05-05 提交 d78811a 源码副本（namespace ncmay 隔离，
 │                                确认单线程、无 SearchOptions）
+├── head_engine/                 git HEAD（当前 42980e5）AI 快照（namespace nchead 隔离，
+│                                核心九件套与其余引擎共享同一份；更新方法见「注意事项」）
 ├── bin/                         编译产物（对局驱动 ×4 + 控制台/工具）
 ├── build_*.bat                  自包含构建脚本（MSVC：优先 VS2019 v142，缺失时回退 VS2022 v143；/O2 /utf-8）
 └── results/                     全部比赛数据与报告（见 results/RESULTS_INDEX.md）
@@ -43,7 +57,9 @@ benchmark/
     ├── selfplay_r0_5s80/        9月版自对弈（规则0×20局，2026-09-14）
     ├── selfplay_r0_blockprobe/  9月版自对弈开局活二堵点率验证（规则0×40局+定点核对，2026-09-17）
     ├── old2018_vs_may/          2018版 vs 5月版（规则0×20局，同深度8）
-    └── evalab_A/B/C/            评估项隔离实验（纯最优 / 关winPressure / 再关pointValue）
+    ├── evalab_A/B/C/            评估项隔离实验（纯最优 / 关winPressure / 再关pointValue）
+    ├── evalweights_2026-10/     评估列审计（forkThreat 跨规则 + 规则3 机动性，5 臂 200 局）
+    └── sprint3_2026-10/         根等价类分组 + LMR 复验合并（2 臂 + 规则2 确认臂）
 ```
 
 ## 构建与运行
@@ -56,6 +72,7 @@ build_may.bat         &  bin\AIBenchmarkMay.exe
 build_oldmay.bat      &  bin\AIBenchmarkOldMay.exe
 build_self.bat        &  bin\AIBenchmarkSelf.exe
 build_tools.bat       &  bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe
+                      &  bin\EvalAbRow.exe bin\VsHead.exe bin\OrderProbe.exe bin\VsHeadCode.exe bin\OrderProbeHead.exe
 ```
 
 用法速查：
@@ -70,8 +87,33 @@ AIBenchmarkOldMay.exe [规则] [局数] [2018深度] [5月深度] [限时ms]
 AIBenchmarkSelf.exe [起始规则] [结束规则] [每规则局数] [深度] [限时ms] [线程数] [判和步数,默认100]
                     当前引擎自对弈（两侧独立AI实例/置换表/种子）；随机/评估参数一律用引擎默认
 DepthProbe.exe      [规则] [棋谱文件] [前缀命令数]
+OrderProbe.exe      [规则=2] [深度=10] [局面数=6] [热身步数=20] [种子=1] [lmr] [pv] [equalRow]
+                    固定局面下的确定性节点/耗时对照（单线程、无随机），用于验证排序/剪枝改动；
+                    lmr=0 关 LMR，pv=0 关根 PV 排序（与 HEAD 逐位对齐用），
+                    equalRow>=0 = 双方按 HEAD 权重表行（等权对照）
+OrderProbeHead.exe  （同参）       同一探测跑 git-HEAD 引擎快照；两 exe 输出逐行对照即节点/耗时差
+VsHeadCode.exe      [局数/手=20] [深度=10] [种子=1] [线程=8] [单步ms=5000] [步数=80] [ruleLo=0] [ruleHi=3]
+                    [newTie=1] [newPv=1] [newHeadRow=0] [var=0] [newLmr=1] [midGap=0]
+                    代码级对抗：工作区引擎 vs git-HEAD 引擎快照（双方引擎默认配置；
+                    前三个开关 = 候选侧消融孔位）。赛制与判读见「AI Agent 对战规范」。
+                    var = 候选侧**单列**权重变体（以 HEAD 表行为基底只改一列，用于权重单变量
+                    isolate）：1=规则2 forkThreat→180、2=fork80、3=规则3 midMobility→10、
+                    4=stalematePressure→20、5=待提=在盘同价、6=forkThreat→0、7=规则3 机动16；
+                    全表与语义见 `vs_head_engine.cpp` 顶部注释。
+                    newLmr = LMR 复验窗口（1=全窗复验并跳过 PVS 重搜［当前默认］，
+                    0=旧"全深零宽复验 + 全深全窗重搜"）。
+                    midGap = 全程层（randomPlies 之后）的近似分随机阈值，0=仅精确同分［默认］；
+                    2026-10 实测 gap=8 为负资产（和棋 54→107），仅作 A/B 孔位。
+                    parRoot = 根随机层等价组并行（1=开［默认］，0=串行）；
+                    规则2 实测分数噪声内、超时 8→0、总耗时 263s→143s。
+                    repLead = 领先重复惩罚上限（0=关［默认］，2026-10 实测 400 无效）；
+                    flyBehind = 飞子落后折减千分比（-1=关［默认］，667 实测中性）。
+                    tieGroups = 全程同分层是否跨等价类抽签（1=旧行为［默认］，0=只在等价组内）；
+                    0 在规则1 +11、规则3 两种子 −19/46，净负，保持 1
 ReplayDebug.exe     [棋谱文件]
 EvalProbe.exe       [每配置随机对局数，默认 120]   评估评分标准验证：独立重算 §1.8 口径 vs 引擎 depth-0 静态评估
+EvalAbRow.exe       [规则] [局数] [深度] [种子] [线程] [variant 0-8] [单步时限ms] [步数上限]
+                    variant 6/7/8 = 2026-10 语义修正包 / 仅手牌 / 仅待提
 opening_analysis.py <棋谱目录...>（python）        规则0棋谱开局活二(2连)堵点率统计
 spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（python）  该局面引擎根分定点核对
 ```
@@ -87,6 +129,90 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
   当前第一合法着法兜底替代并计数，保证对局完整结束。规则 0 下三代模型完全同步
   （全部实验 0 分歧、0 替代、0 被拒）。
 
+## AI Agent 对战规范（2026-10 定稿）
+
+> 本节是任何 AI 行为/评估/搜索改动定稿前必须执行的验证流程。起因：2026-10 冲刺2 证明，
+> 只凭"节点数下降/等权根分不变"初筛放行的心态会把净负改动当收益收下——将杀距离剪枝
+> （MDP）、空着剪枝（NMP）、IIR、LMR"对称修复"四个教科书式改动全部在对抗中实证净负。
+> 强度结论只能来自本节的直接对抗。
+
+### 基线
+
+- **基线 = 最后一次 git commit 的 AI 代码 + 其默认评估权重行**，落盘快照在
+  `benchmark/head_engine/`（namespace `nchead`；核心 `ninechess.*` 与候选共享同一份，
+  出处与差异仅限 AI 类）。快照通过 `NINECHESS_BENCHMARK_HEAD_FRIEND` 宏补一份友元
+  （仅编译快照时定义，主工程/常规编译不受影响）。
+- 更新快照（HEAD 前进后）：
+  ```bash
+  git show HEAD:NineChess/src/ninechess_ai_ab.h  \
+    | perl -pe 's/\r?\n\z/\r\n/' > ...           # 在 `class NineChess_AI_AB` 前一行插入
+                                                  # "namespace nchead {"，文件尾加 "} // namespace nchead"
+  git show HEAD:NineChess/src/ninechess_ai_ab.cpp \
+    | 同上（在 `#include <vector>` 后插入命名空间）
+  rm benchmark/obj/head/*.obj   # 必须删缓存（build_tools.bat 按文件名判断是否重编）
+  ```
+- **构建脚本的缓存门只检查 `obj\new\ninechess.obj`**：改过 `ninechess_ai_ab.cpp` 后若
+  九件套 obj 留存，链接会拿到旧 ai_ab.obj（症状：LNK2019 找不到 s_evalWeightsPerRule，
+  显示为指针类型）。改引擎后先 `rm benchmark/obj/new/*.obj` 再重建。
+
+### 赛制（硬性）
+
+- 四条规则 0/1/2/3 分别测；每规则**先、后手各 20 局**（40 局/规则，奇偶局交替执先），
+  汇报必须含先后手分解。
+- `depth=10`（`dynamicDepth=false` 即严格 10 层；可按机器实测在 8~12 内调整，但必须双方
+  同层并在报告注明），`threads=8`，单步 `timeLimitMs=5000`，`plyLimit=80`
+  （80 条命令未分胜负按和；引擎异常输出按和，与历史驱动同口径）。
+- 双方各自用**引擎默认配置**（默认权重行 + 默认随机策略），每局每侧独立种子
+  （驱动按 `seed + 局号*2 + 1/2` 生成），实例按局新建、逐局清空置换表。
+- 驱动：`bin\VsHeadCode.exe 20 10 <seed> 8 5000 80 <ruleLo> <ruleHi>
+  [newTie=1] [newPv=1] [newHeadRow=0]`
+  （尾三个开关是候选侧的消融孔位，默认=引擎默认；`newHeadRow=1` 强制候选用
+  HEAD 权重行，用于把权重变量隔离出搜索差异。2026-10 被否决的空着/MDP/IIR
+  实验代码已整体移除，不再提供开关；历史臂复现见 sprint2 报告）。
+- 结果写入 `results/<sprint>_YYYY-MM/` 并更新 `results/RESULTS_INDEX.md`。
+
+### 判读（硬性）
+
+- 8 线程同配置重跑本身相差约 ±5 胜/80 局（Lazy SMP 非确定性 + 评估量级噪声）；
+  **40 局/规则内差距 < 10 胜一律视作噪声**，需换种子复跑或多规则合并汇总再下结论。
+- **决胜局（非和棋）比分才是信号**：某侧决胜局比分呈"全败/全胜"是系统性问题的直接证据，
+  不允许用"和棋多"掩盖。
+- 节点数下降、等权根分一致（OrderProbe 逐位对照）只是搜索改动的**初筛通过**，
+  不能替代强度结论；反过来，强度达标但节点上升也无需回退（深度封顶赛制下时间天然有富余）。
+- 报告必须记录：两侧引擎要点与选项默认值、驱动参数与种子、节点/耗时/timeout、
+  每个开关被采用或回退的证据链。
+
+### 改动类型与最低验证要求
+
+| 改动类型 | 最低验证 |
+|---|---|
+| 评估权重 / 新增评估项 | EvalAbRow 单变量（**每条规则独立做**，不许从一条规则外推）+ 本节赛制定稿 |
+| 搜索特性 / 默认开关值 | 本节赛制 A/B；候选侧必须能用开关逐项 isolate（不许打包含测） |
+| 纯重构（不改语义） | EvalProbe 全绿 + `selfcheck` PASS + OrderProbe/OrderProbeHead 等权根分逐位对照 |
+| 随机策略 | 本节赛制（随机侧 vs 基线）量化代价 + 同种子内多样性与跨种子多样性检查 |
+
+### 已实证否决（勿重复引入；数据见 results/sprint2_2026-10/）
+
+> 本表比分口径统一为 **新引擎:HEAD**（和棋单列时以末位标注；消融赛为规则1 12 局小样本，
+> 结论以"开关隔离 + 方向一致的多数样本"为准，完整矩阵见 sprint2 报告）。
+
+| 改动 | 实证 | 现状 |
+|---|---|---|
+| 将杀距离剪枝（mate distance pruning） | 规则1 关 MDP 6:6/7:4/6:5/7:4，开 MDP 1:5/1:6/0:7；与本引擎 aspiration/TT 复用相互作用后系统性削弱 | **实验代码已移除**（教训留档 AI_ALPHABETA §1.4） |
+| 空着剪枝（NMP，仅摆子阶段） | 摆子阶段每手强制且成三威胁密布，是本游戏战术热区，空着假设在此误剪；规则0 决胜 0:24 | **实验代码已移除** |
+| IIR（内部迭代缩减） | 减层入库深度同步变浅 → 节点永久压在请求深度−1（叠加重搜二次触发，名义 d10 实效 d7~8）；规则0 0:24、规则2 惨败 | **实验代码已移除** |
+| LMR 重搜触发"按行棋方对称" | 本游戏磨三连/tempo 敏感，浅层减搜 fail-high 系统性乐观；minimizer 侧"被拒走法"的全深度复验是强度保险。教科书改法致 4 规则决胜 4:54（新:HEAD） | 触发两侧同为 value > alpha（编译期定稿，勿改） |
+| 全程 gap 随机（`randomPlies=0`） | 规则0 24 决胜局全败（叠加在上述任一改动上时混淆，单变量后仍偏负） | 默认 randomPlies=10 |
+
+### 保留的收益（已并入默认）
+
+- **根节点 PV 排序**（sprint1 B1）：aspiration 首搜落到上一迭代最优点，省放宽重搜；消融对照无负效应。
+- **两层根随机**（2026-10 重构）：开局层 = 分差 ≤ gap 走法 softmax 随机；全程层（randomPlies
+  之后）= **精确同分走法（含 16 视角对称等价着法）均匀随机**——组内（等价）零强度损失，
+  消除"等价局面永远同一落点"；跨组同分不是严格等价（`randomTieAcrossGroups` 实验见
+  `results/sprint3_2026-10/`）。
+- **历史表饱和上限**（1<<24）：防长时限深搜下 int32 累加溢出（UB），无行为差异。
+
 ## 结果速览（详细见 results/RESULTS_INDEX.md 与各目录内报告）
 
 | 对阵 | 条件 | 比分 |
@@ -98,6 +224,8 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
 | **5月版 vs 9月版（后手视角修复后）** | 4规则×20局，5月d8 vs 新d10·8线程，5s/步，80步判和，默认随机rP10+g24 | **13:50:17，当前版碾压**（深度封顶10未触限时；执先28/40、执后22/40） |
 | 2018版 vs 5月版 | 规则0×20局，同深度8 | 5:14，5月版明显更强 |
 | 9月版自对弈（规则0） | 规则0×20局，深度10·8线程，5s/步，80步判和，默认随机 | 先手8:后手4:和8（12决胜局先手占67%，约1.2σ） |
+| **冲刺2 定稿 vs HEAD 引擎快照（代码级）** | 4规则×先后手各20局，d10·8线程·5s/步·80步，双方引擎默认 | **54:37:69 噪声带内持平**（四项教科书剪枝被实证否决，见「AI Agent 对战规范」） |
+| **2026-10 工作区 vs 42980e5（代码级）** | 4规则×20局/边×3样本，d10·8线程·5s/步·80步 | **165:146:169（+19/311 决胜，≈1.1σ）**；规则2 +19/73 最稳，规则1 −16/112 弱项（见 `results/sprint3_2026-10/`） |
 
 ## 关键结论
 
@@ -106,6 +234,8 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
    即停，10 秒预算平均只用 0.04~2 秒（90%+ 浪费），对 5月版仅略优（29:17/80 局）；
    放开后平均完成深度 11.5 → 19~20，对 5月版 100 局合计 51:8（胜率 8%）、
    对 2018 版 9:0:1。详见 `results/timeopen_20260913.md`。
+   **注意**：该行为已于 2026-09-14 按产品需求回退（限时只作超时上限，不再占满预算），
+   数据仅作为"深度是数量级杠杆"的证据保留，不是当前默认行为。
 3. 评估项开关 `wp`/`pv` 在 80 局/臂的隔离实验中效应不可分辨（纯最优三臂 17:29 / 18:26 /
    20:25，而同配置重跑本身相差 5 胜）；早先"`winPressure=150` 是负资产、`pointValue=16`
    是正资产"的结论基于错标 wp=-1 的对照臂与单次样本噪声，**已撤回**
@@ -117,7 +247,23 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
    开局随机的默认配置（rP10+g24）对 5月版 50:13 大胜且执先/执后对称（28/40 vs 22/40）；
    修复后"随机 vs 纯最优"的残差是否仍存在未测。详见 `results/may_vs_current_5s80/REPORT.md`。
 5. 规则 0 的先手优势极大：任何一方执先对"会犯开局漂移错误的对手"近乎必胜。
+6. **2026-10 冲刺2**：四个教科书式搜索改进（MDP/NMP/IIR/LMR"对称修复"）在本引擎与本
+   游戏上全部实证净负并回退（详表见「AI Agent 对战规范」）——"剪枝算法优化空间"的最大
+   教训是本引擎的既有形态（PVS+LMR+futility 链、aspiration+TT 复用）已经对每类标准剪枝
+   高度适配，动它之前必须按规范先 isolate 再 A/B。真正落袋的收益：根 PV 排序（sprint1）、
+   两层根随机（含等价局面零损失随机化）、历史表饱和修复。
+7. **评估权重行以 2026-09-15 表（=HEAD）定稿**：2026-10 冲刺1 的"待提=在盘同价"
+   （capture 128/128）经验证流程污染（variant 8 的 A/B 在含 MDP 的代码上跑，"中性"结论
+   不可靠），回退；capture 语义修正保留为后续单变量实验项。
 
 ## 注意事项
 
 - 2018 版/5 月版源码副本仅作了机械性隔离（namespace、宏重命名），算法逻辑未动。
+- head_engine 快照同样只做机械性隔离（namespace 包装 + 友元宏）；HEAD 前进后按
+  「AI Agent 对战规范·基线」一节更新并删除 obj/head 缓存。
+- `evalprobe.cpp` 的 `specConfigForRule()` 与 `S1/S2/S3` 期望式是引擎权重表的同步副本，
+  改 `s_evalWeightsPerRule` 时必须同步（不按同步走 fuzz 必 MISMATCH）。
+- `results/sprint1_2026-10/REPORT.md`：2026-10 冲刺1（评估语义修正 + PV 排序/MDP 引入，
+  当时只做了节点数初筛）。
+- `results/sprint2_2026-10/`：2026-10 冲刺2（四项搜索改动的对抗实证与回退、两层根随机
+  定稿、对战规范建立），是「AI Agent 对战规范」的数据出处。

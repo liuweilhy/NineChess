@@ -24,10 +24,20 @@
 
 #include "ninechess_common.h"
 
+#ifdef NINECHESS_BENCHMARK_HEAD_FRIEND
+// benchmark/head_engine（git HEAD 引擎快照，namespace nchead）与当前核心
+// 共享同一份实现做代码级 A/B；仅编译该快照时定义此宏以补一份友元。
+// 友元不参与布局与符号生成，主工程/常规编译不定义宏，行为不受影响。
+namespace nchead { class NineChess_AI_AB; }
+#endif
+
 class NineChess
 {
     // AI 搜索类需要直接访问内部辅助表和局面数据。
     friend class NineChess_AI_AB;
+#ifdef NINECHESS_BENCHMARK_HEAD_FRIEND
+    friend class nchead::NineChess_AI_AB;
+#endif
     // 对称变换工具（AI 置换表与开局库共用）需要访问线表与变换接口。
     friend class NineChessSymmetry;
 

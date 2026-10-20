@@ -44,8 +44,30 @@ const char* variantName(int variant)
     case 3: return "millSafety16";
     case 4: return "openMill1.5x";
     case 5: return "r2-refined-vs-work";
+    case 6: return "sprint1-semantic-full";
+    case 7: return "sprint1-inHand-only";
+    case 8: return "sprint1-capture-only";
     default: return "unknown";
     }
+}
+
+// 2026-10 冲刺1 之前的表行（baseline 快照；改表后 tableWeights() 已是新行）。
+NineChess_AI_AB::EvalWeights sprint0Row(uint32_t ruleIndex)
+{
+    NineChess_AI_AB::EvalWeights w;
+    if (ruleIndex == 2u) {
+        w.openingMaterial = 128; w.openingInHand = 160; w.openingMill = 0; w.openingOpenMill = 64;
+        w.midMaterial = 180; w.midMill = 0; w.midOpenMill = 64; w.midMobility = 10;
+        w.captureOpening = 160; w.captureMid = 220;
+        w.forkThreat = 0; w.stalematePressure = 0; w.millSafety = 0;
+        return w;
+    }
+    w.openingMaterial = 128; w.openingInHand = 160; w.openingMill = 180; w.openingOpenMill = 64;
+    w.midMaterial = 128; w.midMill = 180; w.midOpenMill = 64;
+    w.midMobility = (ruleIndex == 3u) ? 24 : 10;
+    w.captureOpening = 160; w.captureMid = 180;
+    w.forkThreat = 180; w.stalematePressure = 400; w.millSafety = 0;
+    return w;
 }
 
 NineChess_AI_AB::EvalWeights oldWorkRow2()
@@ -90,6 +112,21 @@ NineChess_AI_AB::EvalWeights makeCandidate(uint32_t ruleIndex, int variant)
         // candidate = 当前表规则2 行（收紧后）；baseline 在 main 里改用 oldWorkRow2
         return NineChess_AI_AB::tableWeights(ruleIndex);
     }
+    else if (variant == 6) {
+        // 冲刺1 全量语义修正：手牌/待提与在盘同价（baseline = sprint0Row）
+        return NineChess_AI_AB::tableWeights(ruleIndex);
+    }
+    else if (variant == 7) {
+        // 仅手牌 160 → 与在盘同价（单变量）
+        w = sprint0Row(ruleIndex);
+        w.openingInHand = w.openingMaterial;
+    }
+    else if (variant == 8) {
+        // 仅待提 160/220 → 与在盘同价（单变量）
+        w = sprint0Row(ruleIndex);
+        w.captureOpening = w.openingMaterial;
+        w.captureMid = w.midMaterial;
+    }
     return w;
 }
 
@@ -111,8 +148,12 @@ int main(int argc, char** argv)
     const uint64_t seed = argc > 4 ? static_cast<uint64_t>(std::atoll(argv[4])) : 1ull;
     const uint32_t threads = argc > 5 ? static_cast<uint32_t>(std::atoi(argv[5])) : 8u;
     const int variant = argc > 6 ? std::atoi(argv[6]) : 0;
-    if (ruleIndex >= RULE_COUNT || games <= 0 || depth <= 0 || threads == 0 || variant < 0 || variant > 5) {
-        std::printf("usage: EvalAbRow.exe [rule0-3] [games] [depth] [seed] [threads] [variant0-5]\n");
+    // 赛制：单步时限（0 = 纯深度）与总步数上限（0 = 300 步，与旧行为一致）。
+    const int timeMs = argc > 7 ? std::atoi(argv[7]) : 0;
+    const int maxPlies = argc > 8 ? std::atoi(argv[8]) : 0;
+    if (ruleIndex >= RULE_COUNT || games <= 0 || depth <= 0 || threads == 0
+        || variant < 0 || variant > 8 || timeMs < 0 || maxPlies < 0) {
+        std::printf("usage: EvalAbRow.exe [rule0-3] [games] [depth] [seed] [threads] [variant0-8] [timeMs] [maxPlies]\n");
         return 2;
     }
 
@@ -120,11 +161,14 @@ int main(int argc, char** argv)
     if (variant == 5) {
         baseline = oldWorkRow2();
     }
+    else if (variant >= 6) {
+        baseline = sprint0Row(ruleIndex);
+    }
     const NineChess_AI_AB::EvalWeights candidate = makeCandidate(ruleIndex, variant);
 
-    std::printf("EvalAbRow rule=%u games=%d depth=%d seed=%llu threads=%u variant=%d (%s)\n",
+    std::printf("EvalAbRow rule=%u games=%d depth=%d seed=%llu threads=%u variant=%d (%s) timeMs=%d maxPlies=%d\n",
         ruleIndex, games, depth, static_cast<unsigned long long>(seed), threads, variant,
-        variantName(variant));
+        variantName(variant), timeMs, maxPlies > 0 ? maxPlies : 300);
     printRow("baseline (legacy)", baseline);
     printRow("candidate         ", candidate);
 
@@ -143,7 +187,7 @@ int main(int argc, char** argv)
         NineChess_AI_AB ai1;
         NineChess_AI_AB ai2;
         NineChess_AI_AB::SearchOptions options;
-        options.timeLimitMs = 0;
+        options.timeLimitMs = timeMs;
         options.randomness = 1;
         options.randomGap = 16;
         options.randomPlies = 10;
@@ -162,8 +206,9 @@ int main(int argc, char** argv)
         ai1.clearTranspositionTable();
         ai2.clearTranspositionTable();
 
+        const int plyCap = maxPlies > 0 ? maxPlies : 300;
         int plies = 0;
-        while (game.whoWin() == NineChess::NOBODY && plies < 300) {
+        while (game.whoWin() == NineChess::NOBODY && plies < plyCap) {
             const bool firstTurn = game.getTurn() == NineChess::PLAYER1;
             NineChess_AI_AB& ai = firstTurn ? ai1 : ai2;
             ai.setChess(game);

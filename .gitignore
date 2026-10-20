@@ -335,6 +335,9 @@ dist
 # benchmark 运行产生的对局棋谱：只留本地，不入库（配置与比分见各目录 REPORT.md / RESULTS_INDEX.md）
 rule*_g*.txt
 benchmark/**/rule*_g*.txt
+# 对战驱动的 stdout 结果捕获（2026-10 起）：只留本地，结论整理进对应 REPORT / 索引后不入库
+vshead*.txt
+benchmark/results_*.txt
 # booksave 训练得到的开局库：本地数据，可随时重训，不入库
 books/*.dat
 

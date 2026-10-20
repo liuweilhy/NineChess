@@ -11,13 +11,11 @@
 #include <vector>
 
 // 按规则的评估权重表。调参按行独立修改；各列含义见 EvalWeights 字段注释。
-// VsHead（d10/th8/5s/80步/纯最优/40局，2026-09-15）：用户 WORK 行 vs HEAD——
-//   规则0 15:7、规则1 25:13、规则3 14:5 均为 WORK 优势；规则2 10:12 噪声内持平。
-// 规则2 在 WORK 包下未受益，按单变量建议收紧（相对 WORK_r2）：
-//   mill 两列 180→0（编号登记死项）；forkThreat 180→0（r2 未证明有效）；
-//   midMaterial 128→180（中局子力过软）；captureMid 180→220（多提规则更吃提子）。
-//   保留 WORK 在 r2 上仍存活的手牌 160 / 活二 64 / 开局盘子 128；stalemate 保持 0。
-// 规则0/1/3 保留用户 WORK 行（已相对 HEAD 取胜）。
+// 2026-09-15 起（提交 42980e5）按规则差异化定稿，2026-10 冲刺2 维持该表不变：
+// 曾试"待提=在盘同价"（capture 160/180-220 → 128/128，2026-10 冲刺1 A2），
+// 但该改动的 A/B（EvalAbRow variant 8，仅规则2、20 局）验证时混入了后来实证
+// 净负的 MDP（见 sprint2 报告），"中性"结论不可靠；按经验最稳原则回退为
+// 2026-09 表。capture 语义修正列为后续单变量实验项（须按新对战规范重测）。
 //           开局: 盘子  手牌  三连 活二 | 中局: 子 三连 活二 机动 | 提子: 开局 中局 | 双三 闷杀 安全
 const NineChess_AI_AB::EvalWeights NineChess_AI_AB::s_evalWeightsPerRule[RULE_COUNT] = {
     /* 0 成三棋 */ { 128,  160,  180,  64,      128, 180,  64,  10,       160,  180,    180,  400,   0 },
@@ -229,9 +227,15 @@ void NineChess_AI_AB::resetStats()
 
 void NineChess_AI_AB::seedRng()
 {
-    const uint64_t seed = m_options.seed != 0u
+    uint64_t seed = m_options.seed != 0u
         ? m_options.seed
         : static_cast<uint64_t>(std::random_device{}());
+    // 固定种子时也按手数换流：随机层的抽签在每次搜索改从新的流位置开始。
+    // 只影响"精确同分候选集内的抽签成员"（各候选分差为 0，交换不影响强度），
+    // 但能保证复现局面（重复循环、对称等价重逢）不会每手抽到同一个成员——
+    // 否则"等价局面不重复落子"的目标在种子驱动的对局里失效。
+    seed = mix64(seed ^ (0x9E3779B97F4A7C15ULL
+        * static_cast<uint64_t>(m_rootPlyCount + 1)));
     m_rng.seed(seed);
 }
 
@@ -439,24 +443,30 @@ void NineChess_AI_AB::aggregateStats(const SearchContext* contexts, size_t count
 
 void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
 {
-    // randomPlies 限定：仅开局前 N 条命令内启用根随机，之后自动恢复纯最优。
-    // 开局对称等价着法多、随机损失小；中残局每一手都关键，且跳过候选
-    // 重打分还能省去整个精确打分阶段的时间开销。
-    if (m_options.randomPlies > 0 && m_rootPlyCount >= m_options.randomPlies) {
-        return;
-    }
-    // 根节点随机选择的“精确打分”阶段：
-    // 1. 迭代加深已保证 ctx.lastCompletedValue 是精确值（首个根走法以全窗口搜索）；
-    // 2. 对其它根走法以“根方视角分差 ≤ gap”为候选窗口重搜，取得全部精确分数。
-    //    评估值是 P1 视角，根方可能是最小化方（后手），窗口方向与比较符必须
-    //    按根方视角换算（2026-09-14 前按 P1 固定视角写死：后手根的候选窗口
-    //    形同虚设、softmax 权重反向，会主动选中差距最大的劣招）；
-    // 3. 候选集内按 softmax 权重随机选一个，杜绝“第二名很臭”的走法被选中。
+    // 根节点随机选择的"精确打分"阶段（2026-10 重构为两层策略 + 等价类分组）：
+    // 1. 开局层（根局面命令数 < randomPlies）：候选窗口 = 根方视角分差 ≤ gap，
+    //    组间 softmax 加权随机——开局对称等价着法多、随机损失小，是多样性的主力；
+    // 2. 全程层（之后每个根局面）：候选窗口收窄为 gap=0，即**精确同分**的走法
+    //    均匀随机，零强度损失，却保证引擎不会在等价局面上永远落子在同一处；
+    // 3. 等价类分组：根走法按"走后局面的 canonical hash"归类，同组即 16 视角
+    //    等价。每组只搜一个代表、把分数赋给全组，组内均匀抽签——随机性包含
+    //    等价局面是**可证明**的（不再依赖"分数恰好相等"），同时省掉等价着法的
+    //    重复全深搜索；组间仍按 gap/softmax 选择（得分接近的其它出招）。
+    // 4. 评估值是 P1 视角，根方可能是最小化方（后手），窗口方向与比较符按根方
+    //    视角换算（2026-09-14 修正；此前按 P1 固定视角写死会让后手根主动选劣招）。
     const int depth = ctx.lastCompletedDepth;
     if (depth < 1) {
         return;
     }
-    const int gap = std::max(1, m_options.randomGap);
+    const bool openingPhase = m_options.randomPlies <= 0
+        || m_rootPlyCount < m_options.randomPlies;
+    if (!openingPhase && !m_options.randomTieLayer) {
+        return; // 旧行为：randomPlies 之后完全恢复纯最优。
+    }
+    // 开局层用配置 gap（≥1）；全程层用 randomGapMid（默认 0 = 仅精确同分）。
+    const int gap = openingPhase
+        ? std::max(1, m_options.randomGap)
+        : std::max(0, m_options.randomGapMid);
     const bool rootMaximizing = ctx.board.getTurn() == PLAYER1;
     // 根方视角值：根方在自己的视角下最大化（后手 = -P1 视角）。
     const auto toRootPov = [rootMaximizing](int value) {
@@ -471,11 +481,66 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
         return;
     }
 
-    orderMoves(ctx, moves, true, Move(), 0);
+    orderMoves(ctx, moves, true, Move(), 0,
+        m_options.rootPvOrdering ? &ctx.rootScores : nullptr);
 
-    // 重新推导最优走法的精确值：Aspiration 窗口的边界缓存可能使
-    // lastCompletedValue 成为上下界而非精确值，这里用全窗口重搜一次作为基准，
-    // 保证候选集的分差比较自洽。
+    // ---- 等价类分组（2026-10）：走后局面的 canonical hash 相同即为 16 视角等价 ----
+    // 等价走法走出的局面在转置表语义下是同一条目，评估与搜索树同构；因此每组
+    // 只需搜一个代表，把分数赋给全组。这既把"等价局面随机"从"分数恰好相等"
+    // 变成可证明的保证，也省掉对称等价着法的重复全深搜索（空盘 24 个落点从
+    // 24 次搜索降为 1 次）。
+    struct RootGroup {
+        uint64_t cls = 0;
+        std::vector<Move> members;
+        int value = 0;
+        bool scored = false;
+    };
+    std::vector<RootGroup> groups;
+    groups.reserve(moves.count);
+    for (size_t i = 0; i < moves.count; ++i) {
+        Snapshot snapshot;
+        ctx.board = m_root;
+        resetHardHashAccum(ctx);
+        applyMove(ctx, moves.moves[i], snapshot);
+        const uint64_t cls = makeCanonicalHash(ctx);
+        undoMove(ctx, snapshot);
+
+        bool merged = false;
+        for (RootGroup& group : groups) {
+            if (group.cls == cls) {
+                group.members.push_back(moves.moves[i]);
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            RootGroup group;
+            group.cls = cls;
+            group.members.push_back(moves.moves[i]);
+            groups.push_back(group);
+        }
+    }
+
+    // 定位迭代最优走法所在的组（先搜它，作为其余组的分差基准）。
+    int bestGroup = -1;
+    for (size_t i = 0; i < groups.size() && bestGroup < 0; ++i) {
+        for (const Move& member : groups[i].members) {
+            if (isSameMove(member, ctx.bestMove)) {
+                bestGroup = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (bestGroup < 0) {
+        return; // 理论上不会发生（bestMove 来自同一根局面的走法生成）
+    }
+
+    // 重新推导最优走法的精确值作为分差基准：Lazy SMP 的工作线程会在搜索期间回填
+    // 更深层的 TT 条目，迭代值与之相比可能偏浅（实测直接沿用 lastCompletedValue
+    // 会让后续组的窗口偏低、节点 +30%）。这一次重推是必要的。
+    // 2026-10 试过以迭代值为中心的小窗口重推（±1 → ±64 → 全窗）：空盘这类
+    // "大量走法同值"的局面里，窄窗要证明精确值就必须把等值子树全部算清，
+    // 实测 813ms → 1065ms，反而更贵；已回退为全窗重推。
     int bestValue = 0;
     {
         Snapshot snapshot;
@@ -488,66 +553,171 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
             return;
         }
     }
+    groups[static_cast<size_t>(bestGroup)].value = bestValue;
+    groups[static_cast<size_t>(bestGroup)].scored = true;
 
-    std::vector<std::pair<Move, int>> exact;
-    exact.reserve(moves.count);
-    // 迭代的最优走法已带重新推导的精确值。
-    exact.push_back(std::make_pair(ctx.bestMove, bestValue));
-
-    for (size_t i = 0; i < moves.count; ++i) {
-        if (isSameMove(moves.moves[i], ctx.bestMove)) {
-            continue;
-        }
-        if (m_requiredQuit.load() || isTimeUp()) {
-            break;
-        }
-
-        // 候选窗口 = 根方视角分差 ≤ gap 的闭区间，边界各放开 1 分让分差
-        // 恰为 gap 的走法取得精确值并通过比较符：
-        // 先手根（最大化）：窗口 [best-gap-1, +INF]，保留 value > best-gap-1；
-        // 后手根（最小化）：窗口 [-INF, best+gap+1]，保留 value < best+gap+1。
-        Snapshot snapshot;
-        ctx.board = m_root;
-        resetHardHashAccum(ctx);
-        applyMove(ctx, moves.moves[i], snapshot);
-        int value = 0;
-        bool withinGap = false;
-        if (rootMaximizing) {
-            const int alpha = std::max(-INF_SCORE, bestValue - gap - 1);
-            value = search(ctx, depth - 1, alpha, INF_SCORE, 1);
-            withinGap = value > alpha;
-        }
-        else {
-            const int beta = std::min(INF_SCORE, bestValue + gap + 1);
-            value = search(ctx, depth - 1, -INF_SCORE, beta, 1);
-            withinGap = value < beta;
-        }
-        undoMove(ctx, snapshot);
-
-        if (ctx.iterationAborted) {
-            break;
-        }
-        if (withinGap) {
-            exact.push_back(std::make_pair(moves.moves[i], value));
+    // 其余组：每组只搜一个代表。候选窗口 = 根方视角分差 ≤ gap 的闭区间，
+    // 边界各放开 1 分让分差恰为 gap 的走法取得精确值并通过比较符：
+    // 先手根（最大化）：窗口 [best-gap-1, +INF]，保留 value > best-gap-1；
+    // 后手根（最小化）：窗口 [-INF, best+gap+1]，保留 value < best+gap+1。
+    std::vector<size_t> taskGroups;
+    taskGroups.reserve(groups.size());
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (static_cast<int>(i) != bestGroup) {
+            taskGroups.push_back(i);
         }
     }
 
-    // 按根方视角降序：最优走法在前（rootScoresText 按此顺序显示）。
-    std::sort(exact.begin(), exact.end(),
-        [&](const std::pair<Move, int>& lhs, const std::pair<Move, int>& rhs) {
-            return toRootPov(lhs.second) > toRootPov(rhs.second);
-        });
+    const bool runParallel = m_options.parallelRootScoring && m_options.threads > 1
+        && taskGroups.size() > 1;
+    if (!runParallel) {
+        for (size_t k = 0; k < taskGroups.size(); ++k) {
+            if (m_requiredQuit.load() || isTimeUp()) {
+                break; // 时间到：候选集按已搜到的部分生效（最优组恒在候选内）
+            }
+            const size_t gi = taskGroups[k];
+            Snapshot snapshot;
+            ctx.board = m_root;
+            resetHardHashAccum(ctx);
+            applyMove(ctx, groups[gi].members.front(), snapshot);
+            int value = 0;
+            bool withinGap = false;
+            if (rootMaximizing) {
+                const int alpha = std::max(-INF_SCORE, bestValue - gap - 1);
+                value = search(ctx, depth - 1, alpha, INF_SCORE, 1);
+                withinGap = value > alpha;
+            }
+            else {
+                const int beta = std::min(INF_SCORE, bestValue + gap + 1);
+                value = search(ctx, depth - 1, -INF_SCORE, beta, 1);
+                withinGap = value < beta;
+            }
+            undoMove(ctx, snapshot);
+
+            if (ctx.iterationAborted) {
+                break;
+            }
+            if (withinGap) {
+                groups[gi].value = value;
+                groups[gi].scored = true;
+            }
+        }
+    }
+    else {
+        // 并行路径（2026-10）：每个等价组一个独立 SearchContext（TT 仍共享、分片加锁），
+        // 只并行"组代表搜索"；最优组重推必须先行（各组窗口以它的精确值为基准）。
+        std::atomic<size_t> nextTask{0u};
+        const auto worker = [&]() {
+            for (;;) {
+                const size_t k = nextTask.fetch_add(1u, std::memory_order_relaxed);
+                if (k >= taskGroups.size()) {
+                    break;
+                }
+                if (m_requiredQuit.load() || isTimeUp()) {
+                    break;
+                }
+                const size_t gi = taskGroups[k];
+
+                SearchContext local;
+                local.board = m_root;
+                resetHardHashAccum(local);
+                // 与单线程路径同口径的重复检测种子：根局面哈希 + 真实的根前轨迹。
+                local.realTrailCount = static_cast<int>(m_realHistoryHashes.size());
+                for (size_t t = 0; t < m_realHistoryHashes.size()
+                    && t < local.realTrail.size(); ++t) {
+                    local.realTrail[t] = m_realHistoryHashes[t];
+                }
+                local.positionHistory[0] = makePlainHash(local);
+
+                Snapshot snapshot;
+                applyMove(local, groups[gi].members.front(), snapshot);
+                int value = 0;
+                bool withinGap = false;
+                if (rootMaximizing) {
+                    const int alpha = std::max(-INF_SCORE, bestValue - gap - 1);
+                    value = search(local, depth - 1, alpha, INF_SCORE, 1);
+                    withinGap = value > alpha;
+                }
+                else {
+                    const int beta = std::min(INF_SCORE, bestValue + gap + 1);
+                    value = search(local, depth - 1, -INF_SCORE, beta, 1);
+                    withinGap = value < beta;
+                }
+                undoMove(local, snapshot);
+
+                if (!local.iterationAborted && withinGap) {
+                    groups[gi].value = value;
+                    groups[gi].scored = true;
+                }
+                ctx.stats.nodes.fetch_add(local.stats.nodes.load(), std::memory_order_relaxed);
+                ctx.stats.ttProbes.fetch_add(local.stats.ttProbes.load(), std::memory_order_relaxed);
+                ctx.stats.ttHits.fetch_add(local.stats.ttHits.load(), std::memory_order_relaxed);
+                ctx.stats.ttStores.fetch_add(local.stats.ttStores.load(), std::memory_order_relaxed);
+                ctx.stats.betaCutoffs.fetch_add(local.stats.betaCutoffs.load(), std::memory_order_relaxed);
+                ctx.stats.repetitionHits.fetch_add(local.stats.repetitionHits.load(), std::memory_order_relaxed);
+            }
+        };
+
+        const size_t workerCount = std::min<size_t>(m_options.threads, taskGroups.size());
+        std::vector<std::thread> pool;
+        pool.reserve(workerCount > 0 ? workerCount - 1 : 0);
+        for (size_t t = 1; t < workerCount; ++t) {
+            pool.emplace_back(worker);
+        }
+        worker();
+        for (std::thread& thread : pool) {
+            thread.join();
+        }
+    }
+
+    // 候选组按根方视角降序（同分按 canonical key 稳定排序）。
+    std::vector<size_t> candidates;
+    candidates.reserve(groups.size());
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (groups[i].scored) {
+            candidates.push_back(i);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](size_t lhs, size_t rhs) {
+        const int lv = toRootPov(groups[lhs].value);
+        const int rv = toRootPov(groups[rhs].value);
+        if (lv != rv) {
+            return lv > rv;
+        }
+        return groups[lhs].cls < groups[rhs].cls;
+    });
+
+    // 诊断输出：按组展开全部成员，等价走法显示同分。
+    std::vector<std::pair<Move, int>> exact;
+    exact.reserve(moves.count);
+    size_t totalMembers = 0;
+    for (size_t index : candidates) {
+        for (const Move& member : groups[index].members) {
+            exact.push_back(std::make_pair(member, groups[index].value));
+        }
+        totalMembers += groups[index].members.size();
+    }
     ctx.rootScores = exact;
 
-    if (m_options.randomness > 0 && exact.size() > 1) {
+    if (m_options.randomness == 0 || totalMembers <= 1) {
+        return;
+    }
+
+    // 组间选择：gap>0（开局层/显式近似分）或显式允许跨类同分抽签时按 softmax 抽组；
+    // 否则（全程层默认）只在最优组内随机——有限深度下"分数恰好相等"不等于等价，
+    // 跨类抽签会把结构不同的最优走法混在一起（规则1 实测 −9）；组内成员互为 16 视角
+    // 等价，随机无强度损失。
+    size_t chosenGroup = candidates.front();
+    if (gap > 0 || m_options.randomTieAcrossGroups) {
         const double temperature = std::max(1.0, static_cast<double>(gap) / 3.0);
-        const double bestScore = static_cast<double>(toRootPov(exact.front().second));
+        const double bestScore =
+            static_cast<double>(toRootPov(groups[candidates.front()].value));
         std::vector<double> weights;
-        weights.reserve(exact.size());
+        weights.reserve(candidates.size());
         double total = 0.0;
-        for (const auto& item : exact) {
+        for (size_t index : candidates) {
             const double w = std::exp(
-                (static_cast<double>(toRootPov(item.second)) - bestScore) / temperature);
+                (static_cast<double>(toRootPov(groups[index].value)) - bestScore) / temperature);
             weights.push_back(w);
             total += w;
         }
@@ -555,15 +725,23 @@ void NineChess_AI_AB::applyExactRootScoring(SearchContext& ctx)
         std::uniform_real_distribution<double> dist(0.0, total);
         const double draw = dist(m_rng);
         double acc = 0.0;
-        for (size_t i = 0; i < exact.size(); ++i) {
+        for (size_t i = 0; i < candidates.size(); ++i) {
             acc += weights[i];
             if (draw <= acc) {
-                ctx.bestMove = exact[i].first;
-                ctx.bestMoveText = formatMove(ctx.bestMove);
+                chosenGroup = candidates[i];
                 break;
             }
         }
     }
+
+    const std::vector<Move>& members = groups[chosenGroup].members;
+    size_t pick = 0;
+    if (members.size() > 1) {
+        std::uniform_int_distribution<size_t> memberDist(0, members.size() - 1);
+        pick = memberDist(m_rng);
+    }
+    ctx.bestMove = members[pick];
+    ctx.bestMoveText = formatMove(ctx.bestMove);
 }
 
 const char* NineChess_AI_AB::bestMove()
@@ -582,7 +760,9 @@ int NineChess_AI_AB::searchRoot(SearchContext& ctx, int depth, int alpha, int be
     }
 
     ctx.iterationRootScores.clear();
-    orderMoves(ctx, moves, true, Move(), 0);
+    // 用上一迭代的根走法分数做 PV 排序（首次迭代时为空，退回纯静态序）。
+    orderMoves(ctx, moves, true, Move(), 0,
+        m_options.rootPvOrdering ? &ctx.rootScores : nullptr);
 
     const bool maximizing = ctx.board.getTurn() == PLAYER1;
     int bestValue = maximizing ? -INF_SCORE : INF_SCORE;
@@ -675,8 +855,17 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
             }
         }
         if (repeated) {
-            const int penalty = m_options.repetitionPenalty;
             ++ctx.stats.repetitionHits;
+            int penalty = m_options.repetitionPenalty;
+            if (m_options.repetitionLeadScale > 0) {
+                // 领先时的重复惩罚加权（2026-10，默认关）：用轮走方视角的静态估值
+                // 缩放罚分——领先方重复的代价更大，落后方重复几乎不罚（下限 0），
+                // 上限由 repetitionLeadScale 给出。重复节点很稀少，这里的估值代价可忽略。
+                const int evalP1 = evaluate(ctx, ply);
+                const int evalMover = ctx.board.getTurn() == PLAYER1 ? evalP1 : -evalP1;
+                penalty += evalMover / 4;
+                penalty = std::max(0, std::min(penalty, m_options.repetitionLeadScale));
+            }
             return ctx.board.getTurn() == PLAYER1 ? -penalty : penalty;
         }
     }
@@ -701,6 +890,12 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
             return evaluate(ctx, ply);
         }
     }
+
+    // 将杀距离剪枝曾以"窗口收进 [-WIN_SCORE+ply, WIN_SCORE-ply]、交叉即返回"
+    // 的形式整块启用（sprint1 B8，含截断与早退），2026-10 对战实证净负后连同
+    // 截断一起删除（与本处 HEAD 原始形态逐位一致）。机制与证据链：
+    // AI_ALPHABETA.md §1.4 与 sprint2 报告 S-A。涉及窗口/入库边界的改动勿凭
+    // 纯理论复现，须按 README 对战规范 isolate 后重测。
 
     const int originalAlpha = alpha;
     const int originalBeta = beta;
@@ -839,18 +1034,31 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
             return value;
         }
 
+        bool fullWindowVerified = false;
         if (reduction > 0 && value > alpha) {
-            // 减搜失败高：该走法可能被低估，恢复全深重搜（零宽窗口）验证后
-            // 才能以全深度语义入库（下界可靠）；对 minimizer 对称适用。
+            // 减搜后恢复全深重搜验证。触发条件两侧同为 value > alpha——**这是
+            // 2026-10 实证后的定稿，勿按 negamax "对称"直觉改成 minimizer 看
+            // value < beta**：本游戏磨三连/被迫拆子的 tempo 敏感局面里，浅层
+            // 减搜的 fail-high 系统性乐观（少看几层看不到后续被逼拆子），
+            // minimizer 侧对"已被拒绝"的走法（v ≥ beta）做全深度复验是实打实的
+            // 强度保险；改成"仅疑似更优才验证"的教科书语义后，规则0/1/2/3 vs HEAD
+            // 决胜局 4:54 全线溃败（详细数据见 benchmark/results/sprint2_2026-10）。
+            // 2026-10 简化：复验直接用全窗 (alpha, beta)（lmrFullWindowVerification），
+            // 复验即取得全窗值，跳过下面的 PVS 重搜——原先"全深零宽 + 全深全窗"
+            // 两次同深度遍历合并为一次，保险语义不变。
             applyMove(ctx, moves.moves[i], snapshot);
-            value = search(ctx, depth - 1 + extension, childAlpha, childBeta, ply + 1);
+            const int verifyAlpha = m_options.lmrFullWindowVerification ? alpha : childAlpha;
+            const int verifyBeta = m_options.lmrFullWindowVerification ? beta : childBeta;
+            value = search(ctx, depth - 1 + extension, verifyAlpha, verifyBeta, ply + 1);
             undoMove(ctx, snapshot);
             if (ctx.iterationAborted) {
                 return value;
             }
+            fullWindowVerified = m_options.lmrFullWindowVerification;
         }
 
-        if (m_options.pvSearch && i > 0u && value > alpha && value < beta) {
+        if (m_options.pvSearch && !fullWindowVerified && i > 0u
+            && value > alpha && value < beta) {
             // 试探发现可能的更优走法：全窗口重搜取得精确值。
             applyMove(ctx, moves.moves[i], snapshot);
             value = search(ctx, depth - 1 + extension, alpha, beta, ply + 1);
@@ -895,7 +1103,12 @@ int NineChess_AI_AB::search(SearchContext& ctx, int depth, int alpha, int beta, 
                 }
                 const int32_t fromIndex = moves.moves[i].from + 1;
                 if (fromIndex >= 0 && fromIndex <= BOARD_SIZE) {
-                    ctx.history[fromIndex][moves.moves[i].to] += depth * depth;
+                    // 饱和上限 1<<24：moveHistoryBonus 在 4M 起即封顶 500k，
+                    // 冻结远超封顶的单元格即可，防止长时限深搜下 int32 溢出（UB）。
+                    int32_t& cell = ctx.history[fromIndex][moves.moves[i].to];
+                    if (cell < (1 << 24)) {
+                        cell += depth * depth;
+                    }
                 }
             }
             break;
@@ -1027,19 +1240,32 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply,
         static_cast<int>(ctx.board.getPlayer1InHand())
         - static_cast<int>(ctx.board.getPlayer2InHand());
 
+    // 双方总子力（在盘 + 手牌）：胜利临近压力、步数急迫项与飞子折减共用。
+    const int total1 = static_cast<int>(ctx.board.getPlayer1OnBoardCount())
+        + static_cast<int>(ctx.board.getPlayer1InHand());
+    const int total2 = static_cast<int>(ctx.board.getPlayer2OnBoardCount())
+        + static_cast<int>(ctx.board.getPlayer2InHand());
+
     // 可提三连、活二、成三点、三连中棋子统计：单遍线扫描同时算齐双方
     // （旧实现每方各扫一遍全部连线）；编号规则下，历史中已登记过的
     // 同编号三连不再视为可提三连。
+    // 休眠项（双三连/三连保护）默认权重为 0：此时不必统计成三点与三连掩码。
+    const bool collectExtras = (w.forkThreat != 0 || w.millSafety != 0);
     MillScan scanP1;
     MillScan scanP2;
-    countMillsBothSides(ctx, occupied, scanP1, scanP2);
+    countMillsBothSides(ctx, occupied, scanP1, scanP2, collectExtras);
     const int millDiff = scanP1.claimable - scanP2.claimable;
     const int openMillDiff = scanP1.openMills - scanP2.openMills;
     const int forkPoint1 = scanP1.forkPoints;
     const int forkPoint2 = scanP2.forkPoints;
-    const int inMillMask1 = static_cast<int>(POPCOUNT32(board1 & scanP1.inMillMask));
-    const int inMillMask2 = static_cast<int>(POPCOUNT32(board2 & scanP2.inMillMask));
-    const int inMillDiff = inMillMask1 - inMillMask2;
+    // 三连保护默认关（权重 0）：此时不必统计"处于己方三连中的棋子"（省两个 popcount）。
+    const int inMillDiff = w.millSafety != 0
+        ? static_cast<int>(POPCOUNT32(board1 & scanP1.inMillMask))
+            - static_cast<int>(POPCOUNT32(board2 & scanP2.inMillMask))
+        : 0;
+    // 点位结构价值：注意直线规则"每点恒 2 条线"并不意味着该项恒 0——
+    // Σ(穿线数) = 2 × 己方在盘子数，因此该项实际等价于"物质差 ×2×pointValueWeight"
+    // （默认 16 时相当于给物质再加 32/子）。这是历史既有行为，暂不改动，只在此注明。
     const int pointValueDiff = countPointValue(ctx, board1) - countPointValue(ctx, board2);
 
     int mobility1 = 0;
@@ -1047,6 +1273,17 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply,
     if (ctx.board.getPhase() == GAME_MID) {
         mobility1 = countMobility(ctx, PLAYER1, occupied);
         mobility2 = countMobility(ctx, PLAYER2, occupied);
+    }
+    // 飞子折减（2026-10，默认关）：飞子方=子数×空位，3 子对 4 子时可达 ≈7 颗子的量级。
+    // 仅当飞子方总子力不占优（再被提一子即负）时折减，抑制"故意掉到 3 子换飞子"。
+    if (m_options.flyingMobilityWhenBehind >= 0 && m_options.flyingMobilityWhenBehind < 1000) {
+        const int scale = m_options.flyingMobilityWhenBehind;
+        if (mobility1 > 0 && ctx.board.canFly(PLAYER1) && total1 <= total2) {
+            mobility1 = mobility1 * scale / 1000;
+        }
+        if (mobility2 > 0 && ctx.board.canFly(PLAYER2) && total2 <= total1) {
+            mobility2 = mobility2 * scale / 1000;
+        }
     }
     const int mobilityDiff = mobility1 - mobility2;
     outMobility1 = mobility1;
@@ -1117,12 +1354,6 @@ int NineChess_AI_AB::evaluate(SearchContext& ctx, int ply,
             * static_cast<int>(ctx.board.getPendingCaptures());
         score += ctx.board.getTurn() == PLAYER1 ? captureBonus : -captureBonus;
     }
-
-    // 双方总子力（在盘 + 手牌），胜利临近压力与步数急迫项共用。
-    const int total1 = static_cast<int>(ctx.board.getPlayer1OnBoardCount())
-        + static_cast<int>(ctx.board.getPlayer1InHand());
-    const int total2 = static_cast<int>(ctx.board.getPlayer2OnBoardCount())
-        + static_cast<int>(ctx.board.getPlayer2InHand());
 
     // 胜利临近压力：判负条件是“在盘 + 手牌”总数低于 minPiecesToSurvive，
     // 对手总数逼近该线时逐子加分，促使优势方主动转化子力优势，
@@ -1424,19 +1655,27 @@ uint64_t NineChess_AI_AB::canonicalMoveKey(const Move& move) const
 }
 
 void NineChess_AI_AB::orderMoves(SearchContext& ctx, MoveList& list, bool isRoot,
-    const Move& ttMove, int ply) const
+    const Move& ttMove, int ply,
+    const std::vector<std::pair<Move, int>>* prevScores) const
 {
     const size_t count = list.count;
 
     if (isRoot && m_options.hashMode != HashMode::Plain) {
-        // 根节点对称分组：组间按组内最高排序键，组内按排序键降序。
-        // 这样互为对称的走法会相邻展开，先被搜索的成员填充置换表，
-        // 同类的后续成员有机会直接命中。
+        // 根节点排序（两层）：
+        // 1) PV 排序（2026-10）：上一迭代的根走法分数优先，最可能的最优着法排最前。
+        //    旧实现每轮迭代都退回纯静态序，aspiration 窗口的首次搜索常落在差着法上，
+        //    触发 fail-low 后的多次放宽重搜，是迭代加深收益的主要漏损点。
+        //    这里只用分数排序、不参与最终选择，因此与根节点随机性不冲突。
+        // 2) 其余走法沿用对称分组：组间按组内最高排序键，组内按排序键降序，
+        //    使互为对称的走法相邻展开，先搜索的成员填充置换表供同类后续成员命中。
+        const bool rootMaximizing = ctx.board.getTurn() == PLAYER1;
         struct KeyedMove {
             Move move;
             uint64_t cls = 0u;
             int64_t key = 0;
             int64_t groupMax = 0;
+            int64_t pv = 0;
+            bool hasPv = false;
         };
         std::vector<KeyedMove> items;
         items.reserve(count);
@@ -1446,6 +1685,16 @@ void NineChess_AI_AB::orderMoves(SearchContext& ctx, MoveList& list, bool isRoot
             item.move = move;
             item.cls = canonicalMoveKey(move);
             item.key = orderKey(ctx, move, true, ttMove, ply);
+            if (prevScores != nullptr && !prevScores->empty()) {
+                for (const auto& entry : *prevScores) {
+                    if (isSameMove(entry.first, move)) {
+                        // 分数是 P1 视角；根方视角下后手要取反。
+                        item.pv = rootMaximizing ? entry.second : -entry.second;
+                        item.hasPv = true;
+                        break;
+                    }
+                }
+            }
             items.push_back(item);
         }
         for (size_t i = 0; i < count; ++i) {
@@ -1459,6 +1708,12 @@ void NineChess_AI_AB::orderMoves(SearchContext& ctx, MoveList& list, bool isRoot
         }
         std::sort(items.begin(), items.end(),
             [](const KeyedMove& lhs, const KeyedMove& rhs) {
+                if (lhs.hasPv != rhs.hasPv) {
+                    return lhs.hasPv;
+                }
+                if (lhs.hasPv && lhs.pv != rhs.pv) {
+                    return lhs.pv > rhs.pv;
+                }
                 if (lhs.groupMax != rhs.groupMax) {
                     return lhs.groupMax > rhs.groupMax;
                 }
@@ -1982,7 +2237,7 @@ uint64_t NineChess_AI_AB::mixSelectedPos(uint64_t hash, int32_t selectedPos) con
 
 
 void NineChess_AI_AB::countMillsBothSides(SearchContext& ctx, uint32_t occupied,
-    MillScan& outP1, MillScan& outP2) const
+    MillScan& outP1, MillScan& outP2, bool collectExtras) const
 {
     // 单遍扫描全部连线，同时统计双方的可提三连、活二、成三点与
     // 处于三连中的棋子掩码（旧实现每方各扫一遍全部连线，中局估值
@@ -2003,14 +2258,19 @@ void NineChess_AI_AB::countMillsBothSides(SearchContext& ctx, uint32_t occupied,
     uint32_t inMill1 = 0;
     uint32_t inMill2 = 0;
     const bool repeatedMills = ctx.board.m_rule.allowRepeatedMills;
+    // 该规则下"可提三连"列是否为活项：规则 2 表行置 0（编号登记后站立三连永不再提），
+    // 此时连历史登记查表也可以省掉（每叶子每条线一次查表）。
+    const bool needClaimable = m_weights.openingMill != 0 || m_weights.midMill != 0;
     for (uint32_t lineId = 0; lineId < ctx.board.m_lineCount; ++lineId) {
         const uint32_t mask = ctx.board.m_lineMasks[lineId];
         const uint32_t bits1 = board1 & mask;
         const uint32_t bits2 = board2 & mask;
         const uint32_t occBits = occupied & mask;
         if (bits1 == mask) {
-            inMill1 |= mask;
-            if (repeatedMills || !isMillKeyInHistory(ctx, PLAYER1, lineId)) {
+            if (collectExtras) {
+                inMill1 |= mask;
+            }
+            if (needClaimable && (repeatedMills || !isMillKeyInHistory(ctx, PLAYER1, lineId))) {
                 ++claimable1;
             }
         }
@@ -2018,17 +2278,23 @@ void NineChess_AI_AB::countMillsBothSides(SearchContext& ctx, uint32_t occupied,
             // 该活二的成三点（线内唯一空位）；多个活二的成三点互不相同才是真威胁，
             // 共点的双活二会被对手一手全堵死。
             ++open1;
-            threat1 |= mask & ~occupied;
+            if (collectExtras) {
+                threat1 |= mask & ~occupied;
+            }
         }
         if (bits2 == mask) {
-            inMill2 |= mask;
-            if (repeatedMills || !isMillKeyInHistory(ctx, PLAYER2, lineId)) {
+            if (collectExtras) {
+                inMill2 |= mask;
+            }
+            if (needClaimable && (repeatedMills || !isMillKeyInHistory(ctx, PLAYER2, lineId))) {
                 ++claimable2;
             }
         }
         else if (POPCOUNT32(bits2) == 2u && occBits == bits2) {
             ++open2;
-            threat2 |= mask & ~occupied;
+            if (collectExtras) {
+                threat2 |= mask & ~occupied;
+            }
         }
     }
     outP1.claimable = claimable1;
