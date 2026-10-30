@@ -133,6 +133,23 @@ public:
                                         // 规则2 实测：分数噪声内持平（10:11:19），
                                         // 但超时 8→0、总搜索耗时 263s→143s。A/B 用开关。
         bool quiescenceSearch = true;   // 深度 0 时展开“形成三连/提子”的静默搜索
+        bool quiescenceStrictCapture = true;
+                                        // 静默搜索强制提子节点语义（2026-10 定稿默认 true）：
+                                        // true = 走子成三后的强制提子节点不做 stand-pat
+                                        // （旧实现先按静态评估截断，等价于允许“不提子”的
+                                        // 非法停着）；该节点必须展开实际提子走法，
+                                        // 仅在无合法提子时回退静态评估。
+                                        // 语义正确性由 SearchRegression 白盒比对定稿（旧行为
+                                        // 8/8 用例暴露差异）；强度 320 局两种子 +8/194 决胜
+                                        // （全规则噪声内、零超时）= 中性，按正确性采纳。
+        bool ttMoveFromShallow = true;  // 浅层置换表条目的排序复用（2026-10 定稿默认 true）：
+                                        // true = storedDepth < 请求深度的条目仍解出最佳走法
+                                        // 作排序提示（迭代加深下上一轮 d-1 的最优走法正是
+                                        // 当前 d 最需要的排序信息）；分值复用/窗口收紧/截断
+                                        // 仍要求深度足够，浅条目不刷新代数、不计入 ttHits。
+                                        // 强度 320 局两种子 +34/204 决胜（方向一致、四规则
+                                        // 合并全非负、零超时）；节点规则2 −38%（规则1 反升，
+                                        // 只影响耗时）。false = 旧行为（A/B 孔位保留）。
         bool dynamicDepth = true;       // 中局根局面在指定深度上追加 2 层：
                                         // 中局分支数远小于开局，等深度下耗时差百倍，
                                         // 追加层数可把时间预算用在更难的中局上；0 关闭。
@@ -597,6 +614,9 @@ private:
     bool probeTransposition(SearchContext& ctx, uint64_t hash, int depth, int& alpha, int& beta,
         int& value, Move& ttMove, int ply) const;
 
+    // 从置换表槽位的 metaA 解包最佳走法（排序提示用；槽位无走法时保持 ttMove 原值）。
+    static void unpackTTMove(uint32_t metaA, Move& ttMove);
+
     // 把当前节点结果写入置换表，同时记录该节点最佳走法。
     // 胜负分（|value| > WIN_SCORE - kMaxPly）在入库前换算成“距本节点的相对
     // 距离”（+ply），命中时再换算回绝对距离（-ply）：终端值 WIN_SCORE-ply
@@ -777,4 +797,10 @@ private:
 
     // 按规则的评估权重表（定义见 ninechess_ai_ab.cpp，四行初始值相同）。
     static const EvalWeights s_evalWeightsPerRule[RULE_COUNT];
+
+    // benchmark 搜索探针（仅 searchregression.cpp 定义该宏时参与编译）：
+    // 白盒访问静默搜索/置换表内部，用于语义回归；常规构建完全不受影响。
+#ifdef NINECHESS_AI_AB_PROBE_FRIEND
+    friend class NineChessAiAbProbeAccess;
+#endif
 };

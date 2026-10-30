@@ -2,11 +2,14 @@
 // 用途：验证"只影响排序/剪枝、不改变搜索结果"的改动（如根节点 PV 排序、
 // mate distance 剪枝）是否真的降了节点数，而不引入对局噪声。
 // 用法: OrderProbe.exe [rule=2] [depth=10] [positions=6] [warmPlies=20] [seed=1] [lmr=1] [pv=1] [equalRow=-1]
+//       [qstrict=0] [ttshallow=0]
 //       OrderProbeHead.exe（同参）= 同一份探测跑 git HEAD 引擎快照，
 //       两个 exe 的输出逐行对照即得节点/耗时差（2026-10 起免 git stash 重建）。
-//       lmr：lateMoveReductions 开关（0=关）；pv：rootPvOrdering 开关（0=关，与
-//       HEAD 逐位对齐用）；equalRow>=0：双方都按 git HEAD 权重表第 <equalRow> 行
+//       lmr：lateMoveReductions 开关（0=关）；pv：rootPvOrdering 开关（0=关）；
+//       equalRow>=0：双方都按 git HEAD 权重表第 <equalRow> 行
 //       useCustomWeights 搜索（等权对照：根分可比，验证无意外价值漂移）。
+//       qstrict/ttshallow：WORK 引擎的 quiescenceStrictCapture / ttMoveFromShallow
+//       开关（HEAD 快照无这两个字段，编译期剔除）。
 //
 // 关键约束：热身走子必须与"评估函数"无关，否则新旧引擎会走到不同局面，
 // 节点数就不可比。这里不调用搜索，而是直接对"全部可能的命令文本"逐一
@@ -32,7 +35,7 @@ using ProbeEngine = NineChess_AI_AB;
 
 namespace {
 
-// git HEAD（42980e5）的 s_evalWeightsPerRule 四行，等权对照用。
+// git HEAD（78396b4，sprint3 定稿；数值与 42980e5 相同）的 s_evalWeightsPerRule 四行，等权对照用。
 // 改 HEAD 快照时同步这里（对照 HEAD 表见 benchmark/results 各报告）。
 const int32_t kHeadWeightRows[4][13] = {
     /* 0 */ { 128, 160, 180, 64, 128, 180, 64, 10, 160, 180, 180, 400, 0 },
@@ -141,14 +144,17 @@ int main(int argc, char** argv)
     const bool lmr = argc > 6 ? std::atoi(argv[6]) != 0 : true;
     const bool pv = argc > 7 ? std::atoi(argv[7]) != 0 : true;
     const int equalRow = argc > 8 ? std::atoi(argv[8]) : -1;
+    const bool qstrict = argc > 9 ? std::atoi(argv[9]) != 0 : false;
+    const bool ttshallow = argc > 10 ? std::atoi(argv[10]) != 0 : false;
     if (positions <= 0 || depth <= 0) {
-        std::printf("usage: OrderProbe.exe [rule0-3] [depth] [positions] [warmPlies] [seed] [lmr] [pv] [equalRow]\n");
+        std::printf("usage: OrderProbe.exe [rule0-3] [depth] [positions] [warmPlies] [seed] [lmr] [pv] [equalRow] [qstrict] [ttshallow]\n");
         return 2;
     }
 
-    std::printf("OrderProbe[%s] rule=%u depth=%d positions=%d warmPlies=%d seed=%llu lmr=%d pv=%d equalRow=%d\n",
+    std::printf("OrderProbe[%s] rule=%u depth=%d positions=%d warmPlies=%d seed=%llu lmr=%d pv=%d equalRow=%d qstrict=%d ttshallow=%d\n",
         PROBE_ENGINE_TAG, rule, depth, positions, warmPlies,
-        static_cast<unsigned long long>(seed), lmr ? 1 : 0, pv ? 1 : 0, equalRow);
+        static_cast<unsigned long long>(seed), lmr ? 1 : 0, pv ? 1 : 0, equalRow,
+        qstrict ? 1 : 0, ttshallow ? 1 : 0);
 
     ProbeEngine searcher;
     ProbeEngine::SearchOptions opt;
@@ -156,8 +162,15 @@ int main(int argc, char** argv)
     opt.threads = 1;
     opt.randomness = 0;   // 纯最优，保证可复现
     opt.lateMoveReductions = lmr;
+    opt.rootPvOrdering = pv;
 #ifndef PROBE_ENGINE_HEAD
-    opt.rootPvOrdering = pv; // HEAD 快照无此选项（恒关）
+    // HEAD 快照没有这两个新字段；旧快照时代 rootPvOrdering 也在这里被剔除，
+    // 快照刷新到 78396b4 后双方都有该字段，故移出条件块。
+    opt.quiescenceStrictCapture = qstrict;
+    opt.ttMoveFromShallow = ttshallow;
+#else
+    (void)qstrict;
+    (void)ttshallow;
 #endif
     if (equalRow >= 0 && equalRow < 4) {
         opt.useCustomWeights = true;

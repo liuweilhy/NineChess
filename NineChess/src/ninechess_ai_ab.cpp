@@ -1139,22 +1139,36 @@ int NineChess_AI_AB::quiescence(SearchContext& ctx, int alpha, int beta, int ply
     }
 
     const bool maximizing = ctx.board.getTurn() == PLAYER1;
-    int best = evaluate(ctx, ply);
-    if (maximizing) {
-        if (best >= beta) {
-            return best;
+    // 强制提子节点（走子成三后必须提子）不允许“不提子”的 stand-pat：
+    // 旧实现先按静态评估做 stand-pat 截断，或在全部提子较差时返回静态分，
+    // 等价于允许非法停着，并把“不提子”的乐观/悲观界写进窗口。开关默认关
+    // （旧行为，A/B 用）；开启后该节点必须以实际提子结果更新 best，
+    // 仅在无合法提子时回退静态评估。
+    const bool skipStandPat = m_options.quiescenceStrictCapture
+        && ctx.board.getAction() == ACTION_CAPTURE;
+    int best = 0;
+    if (!skipStandPat) {
+        best = evaluate(ctx, ply);
+        if (maximizing) {
+            if (best >= beta) {
+                return best;
+            }
+            if (best > alpha) {
+                alpha = best;
+            }
         }
-        if (best > alpha) {
-            alpha = best;
+        else {
+            if (best <= alpha) {
+                return best;
+            }
+            if (best < beta) {
+                beta = best;
+            }
         }
     }
     else {
-        if (best <= alpha) {
-            return best;
-        }
-        if (best < beta) {
-            beta = best;
-        }
+        // 修正语义：从“最差界”出发，best 只能被真实提子结果改善。
+        best = maximizing ? -INF_SCORE : INF_SCORE;
     }
 
     MoveList moves;
@@ -1172,6 +1186,11 @@ int NineChess_AI_AB::quiescence(SearchContext& ctx, int alpha, int beta, int ply
         // 其它阶段只展开“能形成新三连”的走法（即将到来的提子收益）。
         // 生成路径与旧的“全量生成再过滤”逐条等价，但跳过静态启发打分。
         generateTacticalMoves(ctx, moves);
+    }
+    if (moves.count == 0) {
+        // 非提子节点本来就走 stand-pat（best=静态分），此处回退与其一致；
+        // 强制提子节点理论上必有提子，防御性兜底避免返回 ±INF。
+        return evaluate(ctx, ply);
     }
 
     for (size_t i = 0; i < moves.count; ++i) {
@@ -1908,6 +1927,19 @@ void NineChess_AI_AB::undoMove(SearchContext& ctx, const Snapshot& snapshot)
     ctx.board.m_selectedPos = snapshot.selectedPos;
 }
 
+void NineChess_AI_AB::unpackTTMove(uint32_t metaA, Move& ttMove)
+{
+    const uint32_t moveType = (metaA >> TTStore::TT_TYPE_SHIFT) & 0x3u;
+    if (moveType == MOVE_NONE) {
+        return;
+    }
+    ttMove.type = static_cast<MoveType>(moveType);
+    const uint32_t packedFrom = (metaA >> TTStore::TT_FROM_SHIFT) & 0x1fu;
+    const uint32_t packedTo = (metaA >> TTStore::TT_TO_SHIFT) & 0x1fu;
+    ttMove.from = packedFrom == 0u ? -1 : static_cast<int8_t>(packedFrom - 1u);
+    ttMove.to = packedTo == 0u ? -1 : static_cast<int8_t>(packedTo - 1u);
+}
+
 bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int depth,
     int& alpha, int& beta, int& value, Move& ttMove, int ply) const
 {
@@ -1938,6 +1970,12 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
     const int storedDepth = static_cast<int>(metaB & 0xffu);
 
     if (storedDepth < depth) {
+        // 浅条目的分值不可用（深度不足）。开关开启时仍解出最佳走法作排序提示：
+        // 迭代加深下“上一轮 d-1 的最优走法”正是当前 d 最需要的排序信息。
+        // 分值/窗口/代数一概不动，也不计入 ttHits（那仅统计可用命中）。
+        if (m_options.ttMoveFromShallow) {
+            unpackTTMove(metaA, ttMove);
+        }
         return false;
     }
 
@@ -1959,14 +1997,7 @@ bool NineChess_AI_AB::probeTransposition(SearchContext& ctx, uint64_t hash, int 
         value += ply;
     }
 
-    const uint32_t moveType = (metaA >> TTStore::TT_TYPE_SHIFT) & 0x3u;
-    if (moveType != MOVE_NONE) {
-        ttMove.type = static_cast<MoveType>(moveType);
-        const uint32_t packedFrom = (metaA >> TTStore::TT_FROM_SHIFT) & 0x1fu;
-        const uint32_t packedTo = (metaA >> TTStore::TT_TO_SHIFT) & 0x1fu;
-        ttMove.from = packedFrom == 0u ? -1 : static_cast<int8_t>(packedFrom - 1u);
-        ttMove.to = packedTo == 0u ? -1 : static_cast<int8_t>(packedTo - 1u);
-    }
+    unpackTTMove(metaA, ttMove);
 
     const uint32_t flag = (metaA >> TTStore::TT_FLAG_SHIFT) & 0x3u;
     if (flag == TT_EXACT) {

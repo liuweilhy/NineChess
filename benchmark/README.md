@@ -4,10 +4,14 @@
 纯命令流格式（UTF-8 无 BOM，首行 `r<规则>s<限步>t0`，0-based 坐标），可在
 `NineChessConsole` / GUI 中直接回放。
 
-> **当前状态（2026-10-20）**：候选（工作区）相对 `42980e5`，4 规则 × 20 局/边 × 3 个样本
-> 合计 **165:146:169（候选:HEAD:和，+19/311 决胜）**；规则2 +19/73 最稳，规则1 −16/112
-> 是唯一一致弱项。已采纳：LMR 全窗复验合并、根走法等价类分组、根随机层并行。
-> 详见 `results/sprint3_2026-10/REPORT.md`。
+> **当前状态（2026-10-30，sprint4）**：基线刷新为 `78396b4`。两项白盒定位的搜索
+> 改动定稿默认开：浅 TT 排序复用 `ttMoveFromShallow`（两种子 **+34/204** 决胜，
+> 四规则全非负）、强制提子静默语义修正 `quiescenceStrictCapture`（**+8/194**，
+> 强度中性、按正确性采纳）；组合确认 **+29/199**，换种子 3/4 复核 **+43/185**，
+> 四种子合并 **+72/384 决胜**（收益集中在执先转化 135:59，执后 93:97 持平）。
+> sprint3 采纳：LMR 全窗复验
+> 合并、根走法等价类分组、根随机层并行（当时相对 `42980e5` 三样本 +19/311）。
+> 详见 `results/sprint4_2026-10/REPORT.md` 与 `results/sprint3_2026-10/REPORT.md`。
 
 ## 引擎版本称谓
 
@@ -19,9 +23,10 @@
   含后手根随机视角修复、GUI 默认深度 10 / randomGap 16。
   该称谓只在 benchmark 语境内使用（结果报告、索引、与 AI Agent 的对话）；
   源码与算法文档仍称"当前版/新引擎"。
-- **9月版基线（2026-10 起）**：提交 `42980e5`（2026-09-18），冻结为 `head_engine/`
-  （namespace `nchead`）。2026-10 的代码级 A/B 一律以它为基准；工作区候选 =
-  该基线 + 当轮改动（另含 sprint2 收尾差异，sprint2 报告测得 54:37:69 持平）。
+- **9月版基线（2026-10 起）**：2026-10 冲刺3 期间为提交 `42980e5`（2026-09-18）；
+  **2026-10-30 起刷新为 `78396b4`**（sprint3 定稿提交，即当前 git HEAD）。
+  代码级 A/B 一律以**最后一次 git commit** 冻结进 `head_engine/`
+  （namespace `nchead`）为基准；工作区候选 = 该基线 + 当轮改动。
 
 ## 目录结构
 
@@ -37,6 +42,7 @@ benchmark/
 ├── evalprobe.cpp                工具：评估口径验证（独立重算 vs 引擎 depth-0）
 ├── evalab_row.cpp               工具：评估权重单变量 A/B（variant 0-8，可带时限/步数上限）
 ├── vs_head_engine.cpp           驱动：代码级对抗（工作区引擎 vs git-HEAD 引擎快照，见「AI Agent 对战规范」）
+├── searchregression.cpp         搜索语义白盒回归（静默搜索强制提子/浅 TT 排序复用/根随机等价局面）
 ├── replay_debug.cpp             工具：双模型逐命令回放比对（调试规则分歧用）
 ├── test_oldmill.cpp             工具：成三判定对照小测试（调试遗留）
 ├── opening_analysis.py          工具：规则0棋谱开局活二(2连)堵点率统计（Python）
@@ -45,7 +51,7 @@ benchmark/
 │                                仅宏/命名空间机械改动，零算法改动；其置换表在原码中即被注释停用）
 ├── may_engine/                  2026-05-05 提交 d78811a 源码副本（namespace ncmay 隔离，
 │                                确认单线程、无 SearchOptions）
-├── head_engine/                 git HEAD（当前 42980e5）AI 快照（namespace nchead 隔离，
+├── head_engine/                 git HEAD（2026-10-30 刷新为 78396b4）AI 快照（namespace nchead 隔离，
 │                                核心九件套与其余引擎共享同一份；更新方法见「注意事项」）
 ├── bin/                         编译产物（对局驱动 ×4 + 控制台/工具）
 ├── build_*.bat                  自包含构建脚本（MSVC：优先 VS2019 v142，缺失时回退 VS2022 v143；/O2 /utf-8）
@@ -88,20 +94,27 @@ AIBenchmarkSelf.exe [起始规则] [结束规则] [每规则局数] [深度] [�
                     当前引擎自对弈（两侧独立AI实例/置换表/种子）；随机/评估参数一律用引擎默认
 DepthProbe.exe      [规则] [棋谱文件] [前缀命令数]
 OrderProbe.exe      [规则=2] [深度=10] [局面数=6] [热身步数=20] [种子=1] [lmr] [pv] [equalRow]
+                    [qstrict=0] [ttshallow=0]
                     固定局面下的确定性节点/耗时对照（单线程、无随机），用于验证排序/剪枝改动；
-                    lmr=0 关 LMR，pv=0 关根 PV 排序（与 HEAD 逐位对齐用），
-                    equalRow>=0 = 双方按 HEAD 权重表行（等权对照）
+                    lmr=0 关 LMR，pv=0 关根 PV 排序，
+                    equalRow>=0 = 双方按 HEAD 权重表行（等权对照），
+                    qstrict/ttshallow = WORK 引擎的两个新开关（HEAD 快照无此字段）
 OrderProbeHead.exe  （同参）       同一探测跑 git-HEAD 引擎快照；两 exe 输出逐行对照即节点/耗时差
+SearchRegression.exe [快速=0]      搜索语义白盒回归（强制提子静默语义/浅 TT 排序复用/根随机与
+                                    等价局面/新开关全搜索烟雾；说明见 AI_ALPHABETA.md §4.4）
 VsHeadCode.exe      [局数/手=20] [深度=10] [种子=1] [线程=8] [单步ms=5000] [步数=80] [ruleLo=0] [ruleHi=3]
                     [newTie=1] [newPv=1] [newHeadRow=0] [var=0] [newLmr=1] [midGap=0]
+                    [parRoot=1] [repLead=0] [flyBehind=-1] [tieGroups=1] [qStrict=0] [ttShallow=0]
                     代码级对抗：工作区引擎 vs git-HEAD 引擎快照（双方引擎默认配置；
-                    前三个开关 = 候选侧消融孔位）。赛制与判读见「AI Agent 对战规范」。
+                    开关 = 候选侧消融孔位）。赛制与判读见「AI Agent 对战规范」。
                     var = 候选侧**单列**权重变体（以 HEAD 表行为基底只改一列，用于权重单变量
                     isolate）：1=规则2 forkThreat→180、2=fork80、3=规则3 midMobility→10、
                     4=stalematePressure→20、5=待提=在盘同价、6=forkThreat→0、7=规则3 机动16；
                     全表与语义见 `vs_head_engine.cpp` 顶部注释。
                     newLmr = LMR 复验窗口（1=全窗复验并跳过 PVS 重搜［当前默认］，
                     0=旧"全深零宽复验 + 全深全窗重搜"）。
+                    qStrict / ttShallow = 强制提子静默语义 / 浅层 TT 排序复用（2026-10 新增，
+                    0 = 旧行为；语义见 AI_ALPHABETA.md §1.3/§1.5）。
                     midGap = 全程层（randomPlies 之后）的近似分随机阈值，0=仅精确同分［默认］；
                     2026-10 实测 gap=8 为负资产（和棋 54→107），仅作 A/B 孔位。
                     parRoot = 根随机层等价组并行（1=开［默认］，0=串行）；
@@ -165,8 +178,9 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
 - 双方各自用**引擎默认配置**（默认权重行 + 默认随机策略），每局每侧独立种子
   （驱动按 `seed + 局号*2 + 1/2` 生成），实例按局新建、逐局清空置换表。
 - 驱动：`bin\VsHeadCode.exe 20 10 <seed> 8 5000 80 <ruleLo> <ruleHi>
-  [newTie=1] [newPv=1] [newHeadRow=0]`
-  （尾三个开关是候选侧的消融孔位，默认=引擎默认；`newHeadRow=1` 强制候选用
+  [newTie=1] [newPv=1] [newHeadRow=0] [var=0] [newLmr=1] [midGap=0]
+  [parRoot=1] [repLead=0] [flyBehind=-1] [tieGroups=1] [qStrict=0] [ttShallow=0]`
+  （尾部开关是候选侧的消融孔位，默认=引擎默认；`newHeadRow=1` 强制候选用
   HEAD 权重行，用于把权重变量隔离出搜索差异。2026-10 被否决的空着/MDP/IIR
   实验代码已整体移除，不再提供开关；历史臂复现见 sprint2 报告）。
 - 结果写入 `results/<sprint>_YYYY-MM/` 并更新 `results/RESULTS_INDEX.md`。
@@ -212,6 +226,11 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
   消除"等价局面永远同一落点"；跨组同分不是严格等价（`randomTieAcrossGroups` 实验见
   `results/sprint3_2026-10/`）。
 - **历史表饱和上限**（1<<24）：防长时限深搜下 int32 累加溢出（UB），无行为差异。
+- **浅 TT 排序复用**（`ttMoveFromShallow`，sprint4）：浅条目只解出排序走法，
+  分值/窗口语义不变；两种子 +34/204、四规则全非负；节点规则2 −38% 只影响耗时。
+- **强制提子静默语义**（`quiescenceStrictCapture`，sprint4）：强制提子节点不做
+  stand-pat（旧行为允许"不提子"的非法停着）；+8/194 强度中性，按正确性采纳。
+  白盒回归见 `SearchRegression.exe`（AI_ALPHABETA.md §4.4）。
 
 ## 结果速览（详细见 results/RESULTS_INDEX.md 与各目录内报告）
 
@@ -225,6 +244,7 @@ spot_check.py       <棋谱文件> <事件ply> [深度=12] [第二深度=0]（py
 | 2018版 vs 5月版 | 规则0×20局，同深度8 | 5:14，5月版明显更强 |
 | 9月版自对弈（规则0） | 规则0×20局，深度10·8线程，5s/步，80步判和，默认随机 | 先手8:后手4:和8（12决胜局先手占67%，约1.2σ） |
 | **冲刺2 定稿 vs HEAD 引擎快照（代码级）** | 4规则×先后手各20局，d10·8线程·5s/步·80步，双方引擎默认 | **54:37:69 噪声带内持平**（四项教科书剪枝被实证否决，见「AI Agent 对战规范」） |
+| **sprint4 定稿（两项新开关）vs HEAD=78396b4（代码级）** | 同上赛制，两种子 320 局/组合 | qStrict +8/194（中性，按正确性采纳）；**ttShallow +34/204（方向一致）**；组合 +29/199，种子 3/4 复核 +43/185，**四种子合并 +72/384**（见 `results/sprint4_2026-10/`） |
 | **2026-10 工作区 vs 42980e5（代码级）** | 4规则×20局/边×3样本，d10·8线程·5s/步·80步 | **165:146:169（+19/311 决胜，≈1.1σ）**；规则2 +19/73 最稳，规则1 −16/112 弱项（见 `results/sprint3_2026-10/`） |
 
 ## 关键结论

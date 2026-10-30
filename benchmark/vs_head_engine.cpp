@@ -10,10 +10,13 @@
 //                        [timeMs=5000] [plyLimit=80] [ruleLo=0] [ruleHi=3]
 //                        [newTie=1] [newPv=1] [newHeadRow=0] [var=0] [newLmr=1] [midGap=0]
 //                        [parRoot=1] [repLead=0] [flyBehind=-1] [tieGroups=1]
+//                        [qStrict=0] [ttShallow=0]
 // midGap = 全程层（randomPlies 之后）的近似分随机阈值；0 = 仅精确同分（默认）。
 // parRoot = 根随机层等价组并行（1 = 开）；repLead = 领先时重复惩罚上限（0 = 关）；
 // flyBehind = 飞子方落后时的机动性千分比（-1 = 关）；
-// tieGroups = 全程同分层是否跨等价类抽签（0 = 只在最优等价组内随机［默认］）。
+// tieGroups = 全程同分层是否跨等价类抽签（1 = 默认；0 = 只在最优等价组内随机）；
+// qStrict = 静默搜索强制提子不做 stand-pat（候选侧新开关，0 = 旧行为）；
+// ttShallow = 浅层 TT 条目解出排序走法（候选侧新开关，0 = 旧行为）。
 // var = 候选侧单变量权重变体（基于 HEAD 表行只改一列；0 = 不改，量 sprint2 引擎差异）：
 //   1 = forkThreat → 180（规则2 由 0 打开）
 //   2 = forkThreat → 80
@@ -35,8 +38,8 @@ namespace {
 using NewEngine = NineChess_AI_AB;
 using HeadEngine = nchead::NineChess_AI_AB;
 
-// git HEAD（42980e5）的 s_evalWeightsPerRule 四行；newHeadRow=1 时让 NEW 侧
-// 以 useCustomWeights 套用同表，使双方权重逐列一致（隔离权重变量）。
+// git HEAD（78396b4，sprint3 定稿；数值与 42980e5 相同）的 s_evalWeightsPerRule 四行；
+// newHeadRow=1 时让 NEW 侧以 useCustomWeights 套用同表，使双方权重逐列一致（隔离权重变量）。
 const int32_t kHeadWeightRows[4][13] = {
     /* 0 */ { 128, 160, 180, 64, 128, 180, 64, 10, 160, 180, 180, 400, 0 },
     /* 1 */ { 128, 160, 180, 64, 128, 180, 64, 10, 160, 180, 180, 400, 0 },
@@ -144,7 +147,8 @@ bool engineStep(Engine& ai, NineChess& game, int depth, int64_t timeMs,
 void configureNewEngine(NewEngine& ai, int64_t timeMs, uint32_t threads,
     uint64_t seed, bool newTie, bool newPv,
     bool newHeadRow, int variant, bool newLmr, int midGap,
-    bool parRoot, int repLead, int flyBehind, bool tieGroups, int ruleIndex)
+    bool parRoot, int repLead, int flyBehind, bool tieGroups,
+    bool qStrict, bool ttShallow, int ruleIndex)
 {
     NewEngine::SearchOptions options;
     options.timeLimitMs = timeMs;
@@ -159,6 +163,8 @@ void configureNewEngine(NewEngine& ai, int64_t timeMs, uint32_t threads,
     options.parallelRootScoring = parRoot;
     options.repetitionLeadScale = repLead;
     options.flyingMobilityWhenBehind = flyBehind;
+    options.quiescenceStrictCapture = qStrict;
+    options.ttMoveFromShallow = ttShallow;
     // newHeadRow（整行对齐 HEAD）优先；否则 var != 0 时套用"HEAD 行 + 单列改动"。
     if (newHeadRow || variant != 0) {
         options.useCustomWeights = true;
@@ -170,12 +176,14 @@ void configureNewEngine(NewEngine& ai, int64_t timeMs, uint32_t threads,
 void playRule(uint32_t ruleIndex, int gamesPerSide, int depth, uint64_t seed,
     uint32_t threads, int64_t timeMs, int plyLimit,
     bool newTie, bool newPv, bool newHeadRow, int variant, bool newLmr, int midGap,
-    bool parRoot, int repLead, int flyBehind, bool tieGroups)
+    bool parRoot, int repLead, int flyBehind, bool tieGroups,
+    bool qStrict, bool ttShallow)
 {
-    std::printf("\n==== rule=%u  gamesPerSide=%d  depth=%d  th=%u  timeMs=%lld  plyLimit=%d  seed=%llu  var=%d  newLmr=%d  midGap=%d  parRoot=%d  repLead=%d  flyBehind=%d  tieGroups=%d ====\n",
+    std::printf("\n==== rule=%u  gamesPerSide=%d  depth=%d  th=%u  timeMs=%lld  plyLimit=%d  seed=%llu  var=%d  newLmr=%d  midGap=%d  parRoot=%d  repLead=%d  flyBehind=%d  tieGroups=%d  qStrict=%d  ttShallow=%d ====\n",
         ruleIndex, gamesPerSide, depth, threads, static_cast<long long>(timeMs),
         plyLimit, static_cast<unsigned long long>(seed), variant, newLmr ? 1 : 0, midGap,
-        parRoot ? 1 : 0, repLead, flyBehind, tieGroups ? 1 : 0);
+        parRoot ? 1 : 0, repLead, flyBehind, tieGroups ? 1 : 0,
+        qStrict ? 1 : 0, ttShallow ? 1 : 0);
     if (variant != 0 && !newHeadRow) {
         const NineChess_AI_AB::EvalWeights w = candidateRow(static_cast<int>(ruleIndex), variant);
         std::printf("  NEW row: mat %d/%d hand %d mill %d/%d open %d/%d mob %d cap %d/%d ft %d sp %d ms %d\n",
@@ -203,7 +211,8 @@ void playRule(uint32_t ruleIndex, int gamesPerSide, int depth, uint64_t seed,
         configureNewEngine(newAi, timeMs, threads,
             seed + static_cast<uint64_t>(g) * 2ull + 1ull,
             newTie, newPv, newHeadRow, variant, newLmr, midGap,
-            parRoot, repLead, flyBehind, tieGroups, static_cast<int>(ruleIndex));
+            parRoot, repLead, flyBehind, tieGroups,
+            qStrict, ttShallow, static_cast<int>(ruleIndex));
         configureEngine(headAi, timeMs, threads, seed + static_cast<uint64_t>(g) * 2ull + 2ull);
         newAi.clearTranspositionTable();
         headAi.clearTranspositionTable();
@@ -282,25 +291,27 @@ int main(int argc, char** argv)
     const int repLead = argc > 16 ? std::atoi(argv[16]) : 0;
     const int flyBehind = argc > 17 ? std::atoi(argv[17]) : -1;
     const bool tieGroups = argc > 18 ? std::atoi(argv[18]) != 0 : true; // 引擎默认开
+    const bool qStrict = argc > 19 ? std::atoi(argv[19]) != 0 : false;  // 候选侧新开关，默认旧行为
+    const bool ttShallow = argc > 20 ? std::atoi(argv[20]) != 0 : false; // 候选侧新开关，默认旧行为
     if (gamesPerSide <= 0 || depth <= 0 || threads == 0 || timeMs <= 0
         || plyLimit <= 0 || ruleLo < 0 || ruleHi < ruleLo
         || ruleHi >= static_cast<int>(RULE_COUNT)
         || variant < 0 || variant > 7 || midGap < 0 || repLead < 0) {
-        std::printf("usage: VsHeadCode.exe [gamesPerSide=20] [depth=10] [seed=1] [threads=8] [timeMs=5000] [plyLimit=80] [ruleLo=0] [ruleHi=3] [newTie=1] [newPv=1] [newHeadRow=0] [var=0..7] [newLmr=1] [midGap=0] [parRoot=1] [repLead=0] [flyBehind=-1] [tieGroups=1]\n");
+        std::printf("usage: VsHeadCode.exe [gamesPerSide=20] [depth=10] [seed=1] [threads=8] [timeMs=5000] [plyLimit=80] [ruleLo=0] [ruleHi=3] [newTie=1] [newPv=1] [newHeadRow=0] [var=0..7] [newLmr=1] [midGap=0] [parRoot=1] [repLead=0] [flyBehind=-1] [tieGroups=1] [qStrict=0] [ttShallow=0]\n");
         return 2;
     }
 
-    std::printf("VsHeadCode: worktree engine vs git-HEAD engine snapshot (head_engine/) | d=%d th=%u t=%lldms ply<=%d n=%d/rule/side seed=%llu | TIE=%d PV=%d HEADROW=%d VAR=%d LMRFULL=%d MIDGAP=%d PARROOT=%d REPLEAD=%d FLYBEHIND=%d TIEGROUPS=%d | dynamicDepth=off\n",
+    std::printf("VsHeadCode: worktree engine vs git-HEAD engine snapshot (head_engine/) | d=%d th=%u t=%lldms ply<=%d n=%d/rule/side seed=%llu | TIE=%d PV=%d HEADROW=%d VAR=%d LMRFULL=%d MIDGAP=%d PARROOT=%d REPLEAD=%d FLYBEHIND=%d TIEGROUPS=%d QSTRICT=%d TTSHALLOW=%d | dynamicDepth=off\n",
         depth, threads, static_cast<long long>(timeMs), plyLimit, gamesPerSide,
         static_cast<unsigned long long>(seed),
         newTie ? 1 : 0, newPv ? 1 : 0, newHeadRow ? 1 : 0, variant,
         newLmr ? 1 : 0, midGap, parRoot ? 1 : 0, repLead, flyBehind,
-        tieGroups ? 1 : 0);
+        tieGroups ? 1 : 0, qStrict ? 1 : 0, ttShallow ? 1 : 0);
 
     for (int rule = ruleLo; rule <= ruleHi; ++rule) {
         playRule(static_cast<uint32_t>(rule), gamesPerSide, depth, seed,
             threads, timeMs, plyLimit, newTie, newPv, newHeadRow, variant, newLmr, midGap,
-            parRoot, repLead, flyBehind, tieGroups);
+            parRoot, repLead, flyBehind, tieGroups, qStrict, ttShallow);
     }
     return 0;
 }

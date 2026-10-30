@@ -18,7 +18,7 @@ if not exist obj\new\ninechess.obj (cl %CFLAGS% /Fo:obj\new\ ..\NineChess\src\ni
 if not exist obj\may\ninechess.obj (cl %CFLAGS% /Fo:obj\may\ may_engine\ninechess.cpp may_engine\ninechess_ai_ab.cpp)
 rem head_engine = git HEAD 的 AI 快照（namespace nchead）：更新快照后需删除 obj\head 下的 .obj 才会重编。
 if not exist obj\head\ninechess_ai_ab.obj (cl %CFLAGS% /I..\NineChess\src /DNINECHESS_BENCHMARK_HEAD_FRIEND /Fo:obj\head\ head_engine\ninechess_ai_ab.cpp)
-cl %CFLAGS% /I..\NineChess\src /Fo:obj\tools\ depthprobe.cpp replay_debug.cpp test_oldmill.cpp evalprobe.cpp evalab_row.cpp vs_head.cpp orderprobe.cpp vs_head_engine.cpp
+cl %CFLAGS% /I..\NineChess\src /Fo:obj\tools\ depthprobe.cpp replay_debug.cpp test_oldmill.cpp evalprobe.cpp evalab_row.cpp vs_head.cpp orderprobe.cpp vs_head_engine.cpp searchregression.cpp
 if errorlevel 1 exit /b 1
 cl %CFLAGS% /I..\NineChess\src /DPROBE_ENGINE_HEAD /Fo:obj\tools\orderprobe_head.obj orderprobe.cpp
 if errorlevel 1 exit /b 1
@@ -31,5 +31,6 @@ link /nologo /OUT:bin\VsHead.exe /SUBSYSTEM:CONSOLE obj\tools\vs_head.obj obj\ne
 link /nologo /OUT:bin\OrderProbe.exe /SUBSYSTEM:CONSOLE obj\tools\orderprobe.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
 link /nologo /OUT:bin\VsHeadCode.exe /SUBSYSTEM:CONSOLE obj\tools\vs_head_engine.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj obj\head\ninechess_ai_ab.obj
 link /nologo /OUT:bin\OrderProbeHead.exe /SUBSYSTEM:CONSOLE obj\tools\orderprobe_head.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj obj\head\ninechess_ai_ab.obj
-echo Build OK: bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe bin\EvalAbRow.exe bin\VsHead.exe bin\OrderProbe.exe bin\VsHeadCode.exe bin\OrderProbeHead.exe
+link /nologo /OUT:bin\SearchRegression.exe /SUBSYSTEM:CONSOLE obj\tools\searchregression.obj obj\new\ninechess.obj obj\new\ninechess_ai_ab.obj obj\new\ninechess_symmetry.obj
+echo Build OK: bin\DepthProbe.exe bin\ReplayDebug.exe bin\TestMill.exe bin\EvalProbe.exe bin\EvalAbRow.exe bin\VsHead.exe bin\OrderProbe.exe bin\VsHeadCode.exe bin\OrderProbeHead.exe bin\SearchRegression.exe
 endlocal
