@@ -1,5 +1,17 @@
 # 九连棋 NineChess
 ## 更新历史 Update History：
+### 2026/10/30    v2.3
+    1. AI 搜索重构（冲刺 1~4 定稿）：新增根节点 PV 排序、两层根随机（开局层按分差 softmax、全程层只在精确同分与 16 视角对称等价着法组内均匀抽签）、根随机层等价组并行、LMR 全窗复验合并、浅层置换表条目排序复用，并修正静默搜索强制提子节点的 stand-pat 语义；对上一提交的引擎快照，四种规则各先后手 20 局×4 个种子（640 局）合计 +72/384 决胜。
+       AI search reworked (sprints 1-4 finalised): root PV ordering, two-layer root randomisation (a softmax layer over score gaps in the opening, and after it uniform selection only among exactly equal moves and their 16 symmetric equivalents), parallel processing of equal-scoring root groups, LMR full-window re-search consolidation, move-ordering reuse from shallow transposition entries, plus a corrected stand-pat rule for forced-capture nodes in quiescence search; against the engine snapshot of the previous commit this scores +72 over 384 decisive games in 640 games (four rules, 20 games per side each, four seeds).
+    2. 评估权重按规则分化定稿：成三棋、打三棋与莫里斯共用一行，九连棋关闭不适用的成三/双三/闷杀列并收紧中局机动性；评估口径由 EvalProbe 独立重算校验。
+       Evaluation weights finalised per rule: ChengSanQi, DaSanQi (12-piece) and Nine Men's Morris share a row, while JiuLianQi drops the inapplicable mill/fork/stalemate columns and tightens midgame mobility; the scoring standard is cross-checked by an independent recomputation in EvalProbe.
+    3. benchmark 工程化：三代引擎同进程对抗、代码级 A/B 驱动 VsHeadCode、白盒搜索回归 SearchRegression，并沉淀「AI Agent 对战规范」（固定赛制、噪声阈值、改动类型的最低验证要求）；四轮冲刺报告与全部比分已索引化，被实证否决的教科书式剪枝（MDP/NMP/IIR/LMR 对称修复）记录在案。
+       Benchmark engineering: in-process matches across the three engine generations, the code-level A/B driver VsHeadCode, the white-box search regression SearchRegression and the "AI Agent match protocol" (fixed format, noise thresholds, minimum validation per change type); four sprint reports and every score are indexed, and the textbook pruning ideas rejected by measurement (MDP, NMP, IIR, the symmetric LMR fix) are documented.
+    4. 构建统一：三个工程只保留 x64，exe 统一输出到解决方案级 x64\Debug 与 x64\Release；工具集升级为 VS2022 v143；新增 .editorconfig / .gitattributes 固化编码与行尾（.rc 保持 UTF-16LE 二进制属性，修复克隆后的资源文件损坏）。
+       Build unification: all three projects keep only x64 and the executables go to the solution-level x64\Debug and x64\Release; the toolset is now VS2022 v143; .editorconfig and .gitattributes pin the encodings and line endings (.rc stays binary UTF-16LE, fixing resource corruption after a clone).
+    5. 界面与文档：限时限步标签精简、菜单助记符与状态栏提示修正、界面字体补跨平台回退家族；Readme 与 AGENTS 补齐构建、benchmark 与编码规范说明。
+       UI and docs: the time/step limit labels were trimmed, menu mnemonics and status-bar tips corrected, and the UI font gained cross-platform fallback families; the Readme and AGENTS files now cover the build, benchmark and encoding conventions.
+
 ### 2026/09/15    v2.2
     1. AI 搜索增强：新增静默搜索、浅层剪枝、强制提子延伸、LMR 迟到走法减搜、PVS 零宽试探、Aspiration 窗口与重复局面惩罚（含根局面与真实对局历史），同深度耗时显著下降。
        AI search improvements: added quiet search, shallow pruning, forced-capture extension, LMR late-move reductions, PVS zero-width probes, aspiration windows and repetition penalties (including the root position and the real game history), noticeably cutting the time needed to reach the same depth.

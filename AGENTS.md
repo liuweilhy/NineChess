@@ -42,7 +42,7 @@
 
 ## Version And Localisation
 
-- `NineChess/src/ninechess_version.h` is the single source of the version number (currently 2.2). `NineChess.rc` uses it for FILEVERSION/PRODUCTVERSION and `ninechesswindow.cpp` uses it for the window title and the About dialog; never hardcode a version string anywhere else. Keep the header listed in `ninechess.pro`, `ninechess.vcxproj` and the `.filters` file.
+- `NineChess/src/ninechess_version.h` is the single source of the version number (currently 2.3). `NineChess.rc` uses it for FILEVERSION/PRODUCTVERSION and `ninechesswindow.cpp` uses it for the window title and the About dialog; never hardcode a version string anywhere else. Keep the header listed in `ninechess.pro`, `ninechess.vcxproj` and the `.filters` file.
 - The model must not depend on Qt. Model-visible text (rule names, rule descriptions, status-bar tips) goes out through `NineChess::setTextTranslator()` / `NineChess::translateText()` with context `"NineChess"`; callers with no hook installed (console, tests, benchmark drivers) receive the untouched source text, so their output must not change.
 - `NineChess::getTip()` now returns a translated `std::string` built from a template (`m_tip`) plus `%1`..`%9` arguments (`m_tipArgs`). Keep new tips in template form so that switching the UI language takes effect without replaying the game.
 - UI translations live in `NineChess/translations/ninechess_<code>.ts` for ten languages (zh_CN, zh_TW, en, ja, ko, de, fr, ru, es, pt). After adding or editing translatable strings, run `lupdate` then `lrelease`; every `.qm` must be registered in `ninechesswindow.qrc` under prefix `/i18n` (and listed in the MSBuild project), otherwise the language fails to load and only a qWarning appears.
